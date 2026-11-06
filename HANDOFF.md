@@ -1,6 +1,6 @@
 # ContractorFlow — 双 AI 协作入口
 
-更新：2026-11-06 / 状态：文件交接可用，GitHub 私有仓库已建立，项目通过连接器同步，账户 yunyidamowang，Grok 权限未验证。
+更新：2026-11-06 / 状态：文件交接可用，GitHub 私有仓库已建立，项目通过连接器同步，账户 yunyidamowang，已收到Grok在Issue中的读写测试和正式交接；具体权限边界未审计。
 
 ## 责任边界
 
@@ -36,3 +36,5 @@ Codex 接收后核验关键来源、区分事实与假设、记录需求编号�
 [Grok 连接器官方说明](https://docs.x.ai/grok/connectors) 列出 GitHub 目录连接器及自定义 MCP；[Grok Bot 安全说明](https://docs.x.ai/grok-bot/security) 解释 Bot 权限和网络控制。这只能证明产品有相应路径，不能证明用户的 Bot 已启用。Grok API、Grok 网页和 Grok Bot 的支持不能互相替代。具体账户的 OAuth、工具列表、读写权限和撤销流程都未实测。
 
 未来授权后用无敏感信息测试 Issue 验证：列工具 → 读取本仓库 → 按批准范围写测试 Issue → 回读 → 撤销并确认失败。任一步失败继续文件交接。按用户当前指示，暂不配置复杂 MCP。
+
+第二轮：用户最新品牌/价格决定以DECISIONS.md为准；交接核验见REQUIREMENTS_REVIEW.md；3分40秒演示见DEMO_WALKTHROUGH.md。研究资料处理登记见handoff/register.csv。Issue在完整验收前保持开放。

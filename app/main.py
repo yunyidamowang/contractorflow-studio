@@ -23,6 +23,8 @@ if not TOKEN_FILE.exists():
     TOKEN_FILE.write_text(secrets.token_urlsafe(32))
     TOKEN_FILE.chmod(0o600)
 TOKEN = TOKEN_FILE.read_text().strip()
+SAMPLE = 'SAMPLE DATA — NOT A LIVE CUSTOMER'
+BRAND = os.environ.get('CF_BRAND', 'QuoteTrail Back Office').strip()[:100] or 'QuoteTrail Back Office'
 app = FastAPI(title='ContractorFlow Studio — Demo', docs_url=None, redoc_url=None)
 app.mount('/static', StaticFiles(directory=ROOT / 'app/static'), name='static')
 
@@ -53,6 +55,8 @@ def init():
         CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY,event TEXT,client_id INTEGER,detail TEXT,created TEXT);
         CREATE TABLE IF NOT EXISTS revenue(id INTEGER PRIMARY KEY,client_id INTEGER REFERENCES clients(id),month TEXT,currency TEXT,cents INTEGER,idem TEXT,UNIQUE(client_id,idem));
         ''')
+        if 'original_name' not in {r['name'] for r in c.execute('PRAGMA table_info(files)')}:
+            c.execute('ALTER TABLE files ADD COLUMN original_name TEXT')
         if 'idem' not in {r['name'] for r in c.execute('PRAGMA table_info(revenue)')}:
             c.execute('ALTER TABLE revenue ADD COLUMN idem TEXT')
             c.execute('CREATE UNIQUE INDEX IF NOT EXISTS revenue_idem ON revenue(client_id,idem)')
@@ -92,10 +96,17 @@ async def protect(request: Request, call_next):
     response.headers['X-Process-Time']=str(round(time.monotonic()-start,4))
     return response
 
+def html_page(name):
+    html=(ROOT/'app/static'/name).read_text().replace('{{BRAND}}',escape(BRAND))
+    return Response(html,media_type='text/html')
+
+@app.get('/config')
+def config(): return dict(brand=BRAND,mode='SAMPLE MODE',live_enabled=False,sample_label=SAMPLE)
+
 @app.get('/')
-def home(): return FileResponse(ROOT/'app/static/index.html')
+def home(): return html_page('index.html')
 @app.get('/studio')
-def studio(): return FileResponse(ROOT/'app/static/studio.html')
+def studio(): return html_page('studio.html')
 
 def client(c,cid):
     row=c.execute('SELECT * FROM clients WHERE id=?',(cid,)).fetchone()
@@ -116,7 +127,14 @@ class Estimate(BaseModel):
     currency: Literal['USD','AUD']='USD'
     items: list[Item] = Field(min_length=1,max_length=100)
     idempotency_key: str = Field(min_length=8,max_length=100)
+    source_notes: str = Field(default='',max_length=5000)
+    assumptions: list[str] = Field(default_factory=list,max_length=30)
+    exclusions: list[str] = Field(default_factory=list,max_length=30)
+    alternatives: list[str] = Field(default_factory=list,max_length=30)
+    attachment_ids: list[int] = Field(default_factory=list,max_length=50)
 class Message(BaseModel):
+    tone: Literal['friendly','missing_info','final_check']='friendly'
+    draft: str | None = Field(default=None,max_length=5000)
     title: str = Field(min_length=1,max_length=100)
     source: str = Field(min_length=1,max_length=5000)
     follow_up: str
@@ -198,13 +216,21 @@ def estimate(cid:int,v:Estimate):
             amount=(x.quantity*x.unit_price).quantize(Decimal('.01'),rounding=ROUND_HALF_UP); total+=amount
         lines.append(dict(description=x.description,quantity=str(x.quantity) if x.quantity is not None else None,unit_price=str(x.unit_price) if x.unit_price is not None else None,amount=str(amount) if amount is not None else None,notes=x.notes))
     payload=dict(currency=v.currency,items=lines,total=str(total),missing=missing,summary=f'Draft based only on supplied data. {len(lines)} line items. Known subtotal {v.currency} {total}. Tax, scope and missing values require customer confirmation. No tax or materials assumed.')
+    payload.update(source_notes=v.source_notes,assumptions=v.assumptions,exclusions=v.exclusions,alternatives=v.alternatives,attachment_ids=v.attachment_ids,sample_label=SAMPLE,brand=BRAND)
     with db() as c:
         client(c,cid)
+        for fid in v.attachment_ids:
+            if not c.execute('SELECT 1 FROM files WHERE id=? AND client_id=?',(fid,cid)).fetchone(): raise HTTPException(404,'Attachment not found in this client')
         return save(c,cid,'estimate',v.title,payload,v.idempotency_key)
 @app.post('/api/clients/{cid}/emails')
 def email(cid:int,v:Message):
     category='estimate_request' if any(t in v.source.lower() for t in ['quote','estimate','price']) else 'general_inquiry'
-    payload=dict(source=v.source,category=category,follow_up=v.follow_up,suggestion='Confirm scope; retain current client status until review.',draft='Hello,\n\nThank you for getting in touch. Could you please confirm the project scope, location and preferred timing? We will review the information you provide and follow up with the next steps.\n\nKind regards,\nContractorFlow Back Office\n\nDEMO - DRAFT ONLY. Not sent.')
+    templates={
+        'friendly':'Hello,\n\nI am following up on the estimate shared for your project. Have you had a chance to review it? Please let us know if you have any questions or a preferred next step.',
+        'missing_info':'Hello,\n\nTo help move your estimate forward, could you confirm the outstanding project details listed by your contractor? We will keep the draft on hold until the information is confirmed.',
+        'final_check':'Hello,\n\nThis is a final check-in on your open estimate. Would you like to proceed, revisit the scope, or pause for now? We will update the tracker based on your reply.'}
+    draft=v.draft if v.draft is not None else templates[v.tone]+'\n\nKind regards,\n'+BRAND+'\n\nDRAFT ONLY. Not sent.'
+    payload=dict(source=v.source,category=category,tone=v.tone,follow_up=v.follow_up,suggestion='Reviewer to confirm next step; no message sent.',draft=draft,sample_label=SAMPLE)
     with db() as c:
         client(c,cid)
         return save(c,cid,'email',v.title,payload,v.idempotency_key)
@@ -236,36 +262,52 @@ def status(cid:int,rid:int,v:Transition):
         if v.status not in ALLOWED[r['status']]: raise HTTPException(409,'Invalid approval transition')
         if v.status=='Approved' and r['kind']=='estimate' and json.loads(r['payload'])['missing']: raise HTTPException(409,'Missing fields must be resolved in a new draft')
         c.execute('UPDATE records SET status=?,updated=? WHERE id=? AND client_id=?',(v.status,now(),rid,cid))
-        audit(c,'status_'+v.status,cid,str(rid))
+        audit(c,'status_'+v.status,cid,str(rid)+(' reviewer=local_owner' if v.status=='Approved' else ''))
         return record(c,cid,rid)
 
 def safe_csv(rows):
+    rows=[[SAMPLE]]+rows
     def safe(v):
         s=str(v if v is not None else '')
         return "'"+s if s.lstrip().startswith(('=','+','-','@')) else s
     out=io.StringIO(); csv.writer(out).writerows([[safe(v) for v in row] for row in rows]); return out.getvalue().encode('utf-8-sig')
 
+def sample_footer(canvas,doc):
+    canvas.saveState();canvas.setFont('Helvetica-Bold',9);canvas.drawString(40,25,'SAMPLE DATA - NOT A LIVE CUSTOMER | Draft for contractor review');canvas.restoreState()
+
 def pdf_bytes(r,p,name):
     out=io.BytesIO(); styles=getSampleStyleSheet()
-    story=[Paragraph('DEMO / ESTIMATE DRAFT',styles['Title']),Paragraph(escape(name),styles['Heading2']),Paragraph(escape(r['title']),styles['Normal']),Spacer(1,16)]
+    story=[Paragraph(escape(BRAND)+' / ESTIMATE DRAFT',styles['Title']),Paragraph(escape(name),styles['Heading2']),Paragraph(escape(r['title']),styles['Normal']),Spacer(1,16)]
     rows=[['Description','Qty','Unit price','Amount']]
     for x in p['items']: rows.append([Paragraph(escape(x['description']),styles['Normal']),x['quantity'] or 'TBC',x['unit_price'] or 'TBC',x['amount'] or 'TBC'])
     story.extend([Table(rows,colWidths=[270,60,80,80],repeatRows=1),Spacer(1,20),Paragraph(f"Known subtotal: {p['currency']} {p['total']}",styles['Heading2']),Paragraph(escape(p['summary']),styles['Normal'])])
+    for key in ['source_notes','assumptions','exclusions','alternatives','attachment_ids']:
+        if p.get(key): story.append(Paragraph(escape(key.replace('_',' ').title()+': '+str(p[key])),styles['Normal']))
     for x in p['items']:
         if x['notes']: story.append(Paragraph(escape(x['description']+': '+x['notes']),styles['Normal']))
     for m in p['missing']: story.append(Paragraph(escape(m),styles['Normal']))
-    SimpleDocTemplate(out).build(story); return out.getvalue()
+    SimpleDocTemplate(out).build(story,onFirstPage=sample_footer,onLaterPages=sample_footer); return out.getvalue()
 @app.get('/api/clients/{cid}/records/{rid}/export/{fmt}')
 def export(cid:int,rid:int,fmt:Literal['csv','pdf','txt']):
     with db() as c:
         r=record(c,cid,rid); cl=client(c,cid); p=json.loads(r['payload'])
         if r['status'] not in ('Approved','Completed'): raise HTTPException(409,'Approval required before export')
-        if r['kind']=='estimate':
+        if r['kind']=='photo_report':
+            if fmt=='pdf':
+                out=io.BytesIO();style=getSampleStyleSheet()
+                story=[Paragraph(escape(BRAND)+' / Morning exception report',style['Title']),Paragraph('Sample project: '+escape(p['project']),style['Heading2']),Paragraph('Reported complete: '+str(p['claimed_complete'])+' | Documentation invoice-ready: '+str(p['invoice_ready']),style['Normal']),Spacer(1,14)]
+                rows=[['Required documentation','Checklist result','Source ID']]+[[x['slot'].replace('_',' ').title(),'PRESENT (manual assignment)' if x['file_id'] else 'MISSING',str(x['file_id'] or 'Not supplied')] for x in p['checks']]
+                story.extend([Table(rows,colWidths=[150,210,100],style=[('BACKGROUND',(0,0),(-1,0),'#e5eee9'),('GRID',(0,0),(-1,-1),0.4,'#b9cbc2'),('FONTSIZE',(0,0),(-1,-1),9),('TOPPADDING',(0,0),(-1,-1),9),('BOTTOMPADDING',(0,0),(-1,-1),9)]),Spacer(1,16),Paragraph('Missing: '+escape(', '.join(p['missing']) or 'None'),style['Heading2']),Paragraph(escape(p['next_step']),style['Normal']),Spacer(1,14),Paragraph(escape(p['note']),style['Normal']),Paragraph('Full source/organized-name mapping is included in the CSV and text report.',style['Normal'])])
+                SimpleDocTemplate(out).build(story,onFirstPage=sample_footer,onLaterPages=sample_footer);content=out.getvalue();media='application/pdf'
+            elif fmt=='csv':content=safe_csv([['slot','result','file_id']]+[[x['slot'],x['result'],x['file_id']] for x in p['checks']]+[['Invoice ready',p['invoice_ready']],['Next step',p['next_step']],['Source file ID','Original name','Organized name']]+[[x['source_file_id'],x['source_name'],x['organized_name']] for x in p['mapping']]);media='text/csv'
+            else:content=json.dumps(p,indent=2).encode();media='text/plain'
+        elif r['kind']=='estimate':
             if fmt=='pdf': content=pdf_bytes(r,p,cl['name']); media='application/pdf'
-            elif fmt=='csv': content=safe_csv([['DEMO',cl['name'],p['currency']],['description','quantity','unit_price','amount','notes']]+[[x[k] for k in ('description','quantity','unit_price','amount','notes')] for x in p['items']]+[['Known subtotal','','',p['total']]]); media='text/csv'
-            else: content=p['summary'].encode(); media='text/plain'
+            elif fmt=='csv': content=safe_csv([['DEMO',cl['name'],p['currency']],['description','quantity','unit_price','amount','notes']]+[[x[k] for k in ('description','quantity','unit_price','amount','notes')] for x in p['items']]+[['Known subtotal','','',p['total']]]+[[k,str(p.get(k,''))] for k in ['source_notes','assumptions','exclusions','alternatives','attachment_ids','missing']]); media='text/csv'
+            else: content=(p['summary']+'\n'+json.dumps({k:p.get(k) for k in ['items','source_notes','assumptions','exclusions','alternatives','attachment_ids','missing']},indent=2)).encode(); media='text/plain'
         elif fmt=='txt': content=p.get('draft',json.dumps(p,indent=2)).encode(); media='text/plain'
         else: raise HTTPException(400,'Use txt for this record')
+        if fmt=='txt': content=(SAMPLE+'\n'+BRAND+'\nDraft for contractor review\n\n').encode()+content
         audit(c,'export_'+fmt,cid,str(rid))
         return Response(content,media_type=media,headers={'Content-Disposition':f'attachment; filename="demo-{rid}.{fmt}"'})
 
@@ -295,7 +337,7 @@ async def upload(cid:int,project:str,file:UploadFile=File(...)):
         folder=DATA/'files'/str(cid)/project; folder.mkdir(parents=True,exist_ok=True)
         name=f'{project}-{sha}.{kind}'
         (folder/name).write_bytes(content)
-        fid=c.execute('INSERT INTO files(client_id,project,name,sha,kind,size) VALUES(?,?,?,?,?,?)',(cid,project,name,sha,kind,len(content))).lastrowid
+        fid=c.execute('INSERT INTO files(client_id,project,name,sha,kind,size,original_name) VALUES(?,?,?,?,?,?,?)',(cid,project,name,sha,kind,len(content),Path((file.filename or 'sample').replace('\\','/')).name[:200])).lastrowid
         audit(c,'import_file',cid,str(fid))
         return dict(duplicate=False,id=fid,name=name)
 @app.post('/api/clients/{cid}/files/{project}/delivery')
@@ -319,7 +361,7 @@ def archive(cid:int,rid:int):
                 if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest()!=f['sha']: raise HTTPException(409,'Source file missing or changed; restore and review before delivery')
                 z.write(path,f['name']); rows.append(['Demo',f['name'],f['sha'],f['size'],f['kind']])
             z.writestr('index.csv',safe_csv(rows))
-            z.writestr('README.txt','DEMO. Grouped by operator supplied project only. Exact-byte deduplication. No engineering or safety assessment. Originals unchanged; metadata retained. Do not share without authorization.')
+            z.writestr('README.txt',SAMPLE+'\nGrouped by operator supplied project only. Exact-byte deduplication. No engineering or safety assessment. Originals unchanged; metadata retained. Do not share without authorization.')
         audit(c,'export_archive',cid,str(rid))
         return Response(out.getvalue(),media_type='application/zip',headers={'Content-Disposition':f'attachment; filename="demo-project-{rid}.zip"'})
 @app.get('/api/clients/{cid}/report')
@@ -328,3 +370,98 @@ def report(cid:int):
         client(c,cid)
         counts={r['status']:r['n'] for r in c.execute('SELECT status,count(*) n FROM records WHERE client_id=? GROUP BY status',(cid,))}
         return {'demo':True,'generated':now(),'counts':counts,'note':'Internal daily summary. Follow-up dates are stored in ISO format; no messages sent.'}
+
+class DraftEdit(BaseModel):
+    draft: str = Field(min_length=1,max_length=5000)
+@app.post('/api/clients/{cid}/records/{rid}/draft')
+def edit_draft(cid:int,rid:int,v:DraftEdit):
+    with db() as c:
+        c.execute('BEGIN IMMEDIATE');r=record(c,cid,rid)
+        if r['kind']!='email' or r['status']=='Completed': raise HTTPException(409,'Editable email draft required')
+        p=json.loads(r['payload']);p['draft']=v.draft
+        c.execute("UPDATE records SET payload=?,status='Needs Review',updated=? WHERE id=? AND client_id=?",(json.dumps(p,sort_keys=True),now(),rid,cid))
+        audit(c,'draft_changed_review_required',cid,str(rid));return record(c,cid,rid)
+
+class FollowUp(BaseModel):
+    title: str = Field(min_length=1,max_length=100)
+    stage: Literal['sent','no_reply','questions','waiting_on_contractor','won','declined']
+    last_contact: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    next_action: str | None = None
+    @field_validator('last_contact','next_action')
+    @classmethod
+    def dates(cls,v):
+        if v:
+            from datetime import date
+            date.fromisoformat(v)
+        return v or None
+
+def followup_init(c,cid):
+    c.execute('CREATE TABLE IF NOT EXISTS followups(id INTEGER PRIMARY KEY,client_id INTEGER REFERENCES clients(id),title TEXT,stage TEXT,last_contact TEXT,next_action TEXT)')
+    if not c.execute('SELECT 1 FROM followups WHERE client_id=?',(cid,)).fetchone():
+        for i,stage in enumerate(['sent','no_reply','questions','waiting_on_contractor','won','declined']):
+            c.execute('INSERT INTO followups(client_id,title,stage,last_contact,next_action) VALUES(?,?,?,?,?)',(cid,f'Sample estimate {i+1}',stage,'2026-11-01',None if i==1 else '2026-11-09'))
+@app.get('/api/clients/{cid}/followups')
+def followups(cid:int,missing_next:bool=False):
+    from datetime import date
+    with db() as c:
+        client(c,cid);followup_init(c,cid)
+        rows=[dict(r) for r in c.execute('SELECT * FROM followups WHERE client_id=? ORDER BY id',(cid,))]
+        for r in rows:r['age_days']=max(0,(date.today()-date.fromisoformat(r['last_contact'])).days)
+        return [r for r in rows if not missing_next or not r['next_action']]
+@app.post('/api/clients/{cid}/followups/{fid}')
+def update_followup(cid:int,fid:int,v:FollowUp):
+    with db() as c:
+        client(c,cid);followup_init(c,cid)
+        if not c.execute('SELECT 1 FROM followups WHERE client_id=? AND id=?',(cid,fid)).fetchone():raise HTTPException(404,'Estimate not found in this client')
+        c.execute('UPDATE followups SET title=?,stage=?,last_contact=?,next_action=? WHERE client_id=? AND id=?',(v.title,v.stage,v.last_contact,v.next_action,cid,fid))
+        audit(c,'sample_estimate_stage',cid,str(fid))
+        return {'sample':True,'note':'Imported sample estimate stage only; no email sent'}
+
+class PhotoCheck(BaseModel):
+    project: str = Field(pattern=r'^[A-Za-z0-9_-]{1,60}$')
+    slots: dict[str,int | None]
+    claimed_complete: bool = True
+    idempotency_key: str = Field(min_length=8,max_length=100)
+@app.post('/api/clients/{cid}/photo-check')
+def photo_check(cid:int,v:PhotoCheck):
+    required=['before','during','after','issue','completion','walkthrough']
+    if set(v.slots)-set(required):raise HTTPException(422,'Unknown checklist slot')
+    with db() as c:
+        client(c,cid);checks=[];mapping=[]
+        for slot in required:
+            fid=v.slots.get(slot);f=None
+            if fid is not None:
+                f=c.execute('SELECT * FROM files WHERE id=? AND client_id=? AND project=? AND kind IN (\'png\',\'jpg\')',(fid,cid,v.project)).fetchone()
+                if not f:raise HTTPException(404,'Photo not found in this client/project')
+                mapping.append({'slot':slot,'source_file_id':fid,'source_name':f['original_name'] or 'Legacy sample name unavailable','organized_name':f['name']})
+            checks.append({'slot':slot,'result':'PASS - operator supplied evidence' if f else 'MISSING','file_id':fid})
+        missing=[x['slot'] for x in checks if x['file_id'] is None]
+        payload=dict(sample_label=SAMPLE,project=v.project,claimed_complete=v.claimed_complete,checks=checks,missing=missing,mapping=mapping,invoice_ready=not missing,next_step='Ask the project manager for missing documentation; contractor decides billing readiness.',note='Checklist completeness only. No engineering, safety or actual completion assessment. PASS means a file was manually assigned, not its contents verified.')
+        return save(c,cid,'photo_report','Sample photo exception report',payload,v.idempotency_key)
+
+@app.get('/api/clients/{cid}/followups.csv')
+def followup_csv(cid:int):
+    rows=followups(cid)
+    return Response(safe_csv([['Estimate','Stage (sample import only)','Last contact','Next action','Age since contact (days)']]+[[r['title'],r['stage'],r['last_contact'],r['next_action'],r['age_days']] for r in rows]),media_type='text/csv',headers={'Content-Disposition':'attachment; filename="sample-followups.csv"'})
+
+@app.get('/api/clients/{cid}/records/{rid}/packet')
+def quote_packet(cid:int,rid:int):
+    with db() as c:
+        r=record(c,cid,rid);cl=client(c,cid)
+        if r['kind']!='estimate' or r['status'] not in ('Approved','Completed'):raise HTTPException(409,'Approved estimate required')
+        p=json.loads(r['payload']);out=io.BytesIO();total=0
+        with zipfile.ZipFile(out,'w',zipfile.ZIP_DEFLATED) as z:
+            z.writestr('SAMPLE-README.txt',SAMPLE+'\n'+BRAND+'\nDraft for contractor review. Prices and quantities are supplied, not inferred. Attachments retain original metadata. No live customer data.')
+            z.writestr('sample-estimate.pdf',pdf_bytes(r,p,cl['name']))
+            z.writestr('sample-packet.txt',SAMPLE+'\n'+json.dumps(p,indent=2))
+            z.writestr('sample-line-items.csv',safe_csv([['description','quantity','unit_price','amount','notes']]+[[x[k] for k in ['description','quantity','unit_price','amount','notes']] for x in p['items']]+[['Known subtotal','','',p['total'],'Contractor review required']]))
+            for fid in p.get('attachment_ids',[]):
+                f=c.execute('SELECT * FROM files WHERE id=? AND client_id=?',(fid,cid)).fetchone()
+                if not f:raise HTTPException(409,'Attachment no longer available')
+                total+=f['size']
+                if total>50*1024*1024:raise HTTPException(413,'Sample packet attachments exceed 50 MiB')
+                path=DATA/'files'/str(cid)/f['project']/f['name']
+                if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest()!=f['sha']:raise HTTPException(409,'Attachment missing or changed')
+                z.write(path,'sample-attachments/'+f['name'])
+        audit(c,'export_sample_packet',cid,str(rid))
+        return Response(out.getvalue(),media_type='application/zip',headers={'Content-Disposition':f'attachment; filename="sample-quote-packet-{rid}.zip"'})

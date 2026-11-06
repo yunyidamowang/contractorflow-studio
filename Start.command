@@ -6,6 +6,7 @@ if [[ ! -x .venv/bin/python ]]; then
   exit 1
 fi
 .venv/bin/python -c 'from app.main import init; init()'
+.venv/bin/python -m scripts.demo_delivery || { echo 'Sample preparation failed; see README.'; read; exit 1; }
 printf '\nLocal Demo workspace key (paste into Unlock field):\n'
 cat data/.token
 printf '\n\nOpen http://127.0.0.1:8765/studio · Ctrl+C stops the server.\n'

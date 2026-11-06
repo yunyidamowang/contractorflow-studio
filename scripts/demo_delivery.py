@@ -12,12 +12,12 @@ def main():
         r=client.post('/api/'+path,json=data);r.raise_for_status();return r.json()
     def approve(r,cid):
         if r['status']=='Needs Review': post(f"clients/{cid}/records/{r['id']}/status",{'status':'Approved'})
-    r=post('clients/1/estimates',{'title':'Demo · Interior painting estimate inputs','currency':'USD','items':[{'description':'Wall painting, supplied scope','quantity':'12.5','unit_price':'8.40','notes':'Fictional customer supplied price and quantity'},{'description':'Preparation','quantity':'2','unit_price':'25','notes':'Tax and final scope require confirmation'}],'idempotency_key':'demo-delivery-estimate-v1'})
+    r=post('clients/1/estimates',{'title':'Demo · Interior painting estimate inputs','currency':'USD','items':[{'description':'Wall painting, supplied scope','quantity':'12.5','unit_price':'8.40','notes':'Fictional customer supplied price and quantity'},{'description':'Preparation','quantity':'2','unit_price':'25','notes':'Tax and final scope require confirmation'}],'idempotency_key':'demo-delivery-estimate-v2'})
     approve(r,1)
     for fmt in ['csv','pdf','txt']:
         response=client.get(f"/api/clients/1/records/{r['id']}/export/{fmt}");response.raise_for_status();(out/f'estimate-draft.{fmt}').write_bytes(response.content)
     post(f"clients/1/records/{r['id']}/status",{'status':'Completed'})
-    r=post('clients/2/emails',{'title':'Demo · Lead follow-up','source':'Could you provide a quote? Our project details are not finalized.','follow_up':'2026-11-09','idempotency_key':'demo-delivery-email-v1'})
+    r=post('clients/2/emails',{'title':'Demo · Lead follow-up','source':'Could you provide a quote? Our project details are not finalized.','follow_up':'2026-11-09','idempotency_key':'demo-delivery-email-v2'})
     approve(r,2)
     response=client.get(f"/api/clients/2/records/{r['id']}/export/txt");response.raise_for_status();(out/'follow-up-draft.txt').write_bytes(response.content)
     post(f"clients/2/records/{r['id']}/status",{'status':'Completed'})
