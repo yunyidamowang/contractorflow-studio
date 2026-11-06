@@ -35,3 +35,5 @@ python3.12 -m venv .venv
 重要边界：这是单操作员内部系统，密钥持有人可管理全部 Demo 客户；客户 ID 范围校验阻止把一个客户的记录当作另一个客户处理，但没有多用户身份或客户登录。不得作为公网多租户 SaaS 部署。
 
 协作入口：[HANDOFF.md](HANDOFF.md)。技术评估：[OPEN_SOURCE_EVALUATION.md](OPEN_SOURCE_EVALUATION.md)。待办：[TASKS.md](TASKS.md)。私有仓库：https://github.com/yunyidamowang/contractorflow-studio 。用户已授权同步；Grok 连接权限仍未验证。
+
+第二轮：报价采用可添加行的表单，审核显示可读金额/邮件预览。浏览器证据在artifacts/browser-qa；最新维护记录在maintenance_snapshot.json；真实数据门槛见SECURITY.md。

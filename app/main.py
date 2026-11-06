@@ -139,7 +139,7 @@ class ClientInput(BaseModel):
     def zone_valid(cls,v):
         from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
         try: ZoneInfo(v)
-        except ZoneInfoNotFoundError: raise ValueError('Unknown timezone')
+        except (ZoneInfoNotFoundError, ValueError): raise ValueError('Unknown timezone')
         return v
 class TaskInput(BaseModel):
     title: str = Field(min_length=1,max_length=100)
@@ -160,6 +160,7 @@ class Revenue(BaseModel):
     cents: int = Field(ge=0,le=100000000)
 
 def save(c,cid,kind,title,payload,key):
+    c.execute('BEGIN IMMEDIATE')
     old=c.execute('SELECT * FROM records WHERE client_id=? AND idem=?',(cid,key)).fetchone()
     encoded=json.dumps(payload,sort_keys=True)
     if old:
@@ -216,6 +217,7 @@ def task(cid:int,v:TaskInput):
 def revenue(cid:int,v:Revenue):
     with db() as c:
         client(c,cid)
+        c.execute('BEGIN IMMEDIATE')
         old=c.execute('SELECT * FROM revenue WHERE client_id=? AND idem=?',(cid,v.idempotency_key)).fetchone()
         if old:
             if (old['month'],old['currency'],old['cents'])!=(v.month,v.currency,v.cents): raise HTTPException(409,'Idempotency key reused')
@@ -280,12 +282,14 @@ async def upload(cid:int,project:str,file:UploadFile=File(...)):
             kind='pdf'
         else:
             with Image.open(io.BytesIO(content)) as img:
+                if img.width*img.height>Image.MAX_IMAGE_PIXELS: raise ValueError()
                 if img.format not in ('JPEG','PNG'): raise ValueError()
                 kind='jpg' if img.format=='JPEG' else 'png'
                 img.verify()
     except Exception: raise HTTPException(400,'Only valid non-encrypted PDF, PNG or JPEG accepted')
     with db() as c:
         client(c,cid)
+        c.execute('BEGIN IMMEDIATE')
         old=c.execute('SELECT * FROM files WHERE client_id=? AND project=? AND sha=?',(cid,project,sha)).fetchone()
         if old: return dict(duplicate=True,file=dict(old))
         folder=DATA/'files'/str(cid)/project; folder.mkdir(parents=True,exist_ok=True)
@@ -311,7 +315,9 @@ def archive(cid:int,rid:int):
         with zipfile.ZipFile(out,'w',zipfile.ZIP_DEFLATED) as z:
             rows=[['Demo','name','sha256','bytes','type']]
             for f in p['files']:
-                z.write(DATA/'files'/str(cid)/p['project']/f['name'],f['name']); rows.append(['Demo',f['name'],f['sha'],f['size'],f['kind']])
+                path=DATA/'files'/str(cid)/p['project']/f['name']
+                if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest()!=f['sha']: raise HTTPException(409,'Source file missing or changed; restore and review before delivery')
+                z.write(path,f['name']); rows.append(['Demo',f['name'],f['sha'],f['size'],f['kind']])
             z.writestr('index.csv',safe_csv(rows))
             z.writestr('README.txt','DEMO. Grouped by operator supplied project only. Exact-byte deduplication. No engineering or safety assessment. Originals unchanged; metadata retained. Do not share without authorization.')
         audit(c,'export_archive',cid,str(rid))

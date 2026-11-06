@@ -8,3 +8,4 @@ artifacts/
 .DS_Store
 handoff/inbox/*
 !handoff/inbox/README.md
+output/

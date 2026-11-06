@@ -1,0 +1,68 @@
+[
+  {
+    "repo": "github/github-mcp-server",
+    "source": "https://github.com/github/github-mcp-server/commits/main.atom",
+    "updated": "2026-11-04T13:23:03Z",
+    "commit": "tag:github.com,2008:Grit::Commit/99d6d6503a7b2a133e2f8a595d6d0ba24b4086d3"
+  },
+  {
+    "repo": "activepieces/activepieces",
+    "source": "https://github.com/activepieces/activepieces/commits/main.atom",
+    "updated": "2026-11-06T11:20:12Z",
+    "commit": "tag:github.com,2008:Grit::Commit/58b04df4f6e33efd66186038151e96135c4bd3c0"
+  },
+  {
+    "repo": "n8n-io/n8n",
+    "source": "https://github.com/n8n-io/n8n/commits/master.atom",
+    "updated": "2026-11-06T11:22:45Z",
+    "commit": "tag:github.com,2008:Grit::Commit/02ed2fb3761e4c303b666ae751d8e3ecfa3036d3"
+  },
+  {
+    "repo": "baserow/baserow",
+    "source": "https://github.com/baserow/baserow/commits/develop.atom",
+    "updated": "2026-11-06T12:50:48Z",
+    "commit": "tag:github.com,2008:Grit::Commit/308919f3d4b5102a3d2f339c3190530652335e7e"
+  },
+  {
+    "repo": "espocrm/espocrm",
+    "source": "https://github.com/espocrm/espocrm/commits/master.atom",
+    "updated": "2026-11-06T09:15:32Z",
+    "commit": "tag:github.com,2008:Grit::Commit/0f04777e20569e6c4681fc0b158cfc8ddbea11ed"
+  },
+  {
+    "repo": "py-pdf/pypdf",
+    "source": "https://github.com/py-pdf/pypdf/commits/main.atom",
+    "updated": "2026-11-06T11:54:54Z",
+    "commit": "tag:github.com,2008:Grit::Commit/8eeb0509d712e324e68e2bd38aff69e3b672e0cd"
+  },
+  {
+    "repo": "python-pillow/Pillow",
+    "source": "https://github.com/python-pillow/Pillow/commits/main.atom",
+    "updated": "2026-11-06T12:57:53Z",
+    "commit": "tag:github.com,2008:Grit::Commit/e0869308687cd6a73b81bf9207eb64037cc91cea"
+  },
+  {
+    "repo": "paperless-ngx/paperless-ngx",
+    "source": "https://github.com/paperless-ngx/paperless-ngx/commits/dev.atom",
+    "updated": "2026-11-06T03:07:21Z",
+    "commit": "tag:github.com,2008:Grit::Commit/8bc9db816abe4c5747430bafc2846c72211b0a6f"
+  },
+  {
+    "repo": "docling-project/docling",
+    "source": "https://github.com/docling-project/docling/commits/main.atom",
+    "updated": "2026-11-06T12:54:29Z",
+    "commit": "tag:github.com,2008:Grit::Commit/756059c2666753890e3f531ff5d6416be8b3df0e"
+  },
+  {
+    "repo": "openclaw/openclaw",
+    "source": "https://github.com/openclaw/openclaw/commits/main.atom",
+    "updated": "2026-11-06T12:55:58Z",
+    "commit": "tag:github.com,2008:Grit::Commit/03c7efa66c06be0fac74284cfd145025b6cd51f2"
+  },
+  {
+    "repo": "ollama/ollama",
+    "source": "https://github.com/ollama/ollama/commits/main.atom",
+    "updated": "2026-11-06T00:57:40Z",
+    "commit": "tag:github.com,2008:Grit::Commit/6362e0a30887bdd4f69e07a94e8a513383576204"
+  }
+]

@@ -31,3 +31,24 @@
 ## Grok 连接结论
 
 [GitHub 官方 MCP](https://github.com/github/github-mcp-server) 有远程入口和认证方式；[Grok 官方连接器文档](https://docs.x.ai/grok/connectors) 列出 GitHub 连接器及自定义 MCP；[Bot 安全说明](https://docs.x.ai/grok-bot/security) 解释权限和网络限制。属于产品文档支持，不是用户账户联通证据。本次没有登录、授权、创建远程仓库或配置 MCP；优先使用 HANDOFF.md 的文件流程，用户授权后才验证具体客户端。
+
+
+## 2026-11-06 维护状态复核（取代此前未知项）
+
+直接读取官方 GitHub Atom 提交订阅成功，未使用账户凭据。以下为读取时订阅首项的更新时间，不等于发布版本、安全审计或稳定性保证。完整 SHA 和来源保存在 maintenance_snapshot.json。
+
+| 项目 | 订阅首项更新时间 UTC | 官方来源 |
+|---|---|---|
+| github/github-mcp-server | 2026-11-04T13:23:03Z | [提交订阅](https://github.com/github/github-mcp-server/commits/main.atom) |
+| activepieces/activepieces | 2026-11-06T11:20:12Z | [提交订阅](https://github.com/activepieces/activepieces/commits/main.atom) |
+| n8n-io/n8n | 2026-11-06T11:22:45Z | [提交订阅](https://github.com/n8n-io/n8n/commits/master.atom) |
+| baserow/baserow | 2026-11-06T12:50:48Z | [提交订阅](https://github.com/baserow/baserow/commits/develop.atom) |
+| espocrm/espocrm | 2026-11-06T09:15:32Z | [提交订阅](https://github.com/espocrm/espocrm/commits/master.atom) |
+| py-pdf/pypdf | 2026-11-06T11:54:54Z | [提交订阅](https://github.com/py-pdf/pypdf/commits/main.atom) |
+| python-pillow/Pillow | 2026-11-06T12:57:53Z | [提交订阅](https://github.com/python-pillow/Pillow/commits/main.atom) |
+| paperless-ngx/paperless-ngx | 2026-11-06T03:07:21Z | [提交订阅](https://github.com/paperless-ngx/paperless-ngx/commits/dev.atom) |
+| docling-project/docling | 2026-11-06T12:54:29Z | [提交订阅](https://github.com/docling-project/docling/commits/main.atom) |
+| openclaw/openclaw | 2026-11-06T12:55:58Z | [提交订阅](https://github.com/openclaw/openclaw/commits/main.atom) |
+| ollama/ollama | 2026-11-06T00:57:40Z | [提交订阅](https://github.com/ollama/ollama/commits/main.atom) |
+
+关键许可复核：[n8n 当前 LICENSE](https://github.com/n8n-io/n8n/blob/master/LICENSE.md) 将用途限制为内部业务或非商业/个人用途，并限制分发；不能默认允许转售托管 n8n。服务型工作室的具体使用方式须在引入前确认。Activepieces 社区 MIT/企业商业许可、Baserow OSE MIT/高级功能单独许可、EspoCRM AGPLv3、Paperless GPLv3 的初评仍适用。代码许可不替代模型权重或连接服务条款。当前仅采用已测试的轻量组件，不安装上述平台。

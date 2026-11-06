@@ -90,6 +90,26 @@ class StudioTest(unittest.TestCase):
         self.assertEqual(self.c.post('/api/clients/1/revenue',json=payload).status_code,409)
         payload['month']='2026-99'
         self.assertEqual(self.c.post('/api/clients/1/revenue',json=payload).status_code,422)
+    def test_11_invalid_timezone(self):
+        for zone in ['/private/invalid','../invalid','Invalid/Zone']:
+            r=self.c.post('/api/clients',json={'name':'Demo','service':'Paint','timezone':zone,'package':'Trial'})
+            self.assertEqual(r.status_code,422,r.text)
+    def test_12_concurrent_idempotency(self):
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            results=list(pool.map(lambda _:self.make_estimate('concurrent-duplicate-test'),range(4)))
+        self.assertTrue(all(r.status_code==200 for r in results))
+        self.assertEqual(len({r.json()['id'] for r in results}),1)
+    def test_13_corrupt_delivery(self):
+        from app.main import DATA
+        with db() as c:
+            r=c.execute("SELECT * FROM records WHERE kind='files' AND client_id=1").fetchone()
+            p=json.loads(r['payload']);f=p['files'][0]
+        path=DATA/'files'/'1'/p['project']/f['name'];original=path.read_bytes()
+        try:
+            path.write_bytes(b'changed')
+            self.assertEqual(self.c.get(f"/api/clients/1/records/{r['id']}/archive").status_code,409)
+        finally:path.write_bytes(original)
     def test_11_pages(self):
         for p in ['/','/studio','/static/studio.js','/static/style.css']:self.assertEqual(self.c.get(p).status_code,200)
         self.assertEqual(self.c.get('/api/clients/999/workspace').status_code,404)
