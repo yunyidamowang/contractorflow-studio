@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+data/
+backups/
+artifacts/
+.env
+.DS_Store
+handoff/inbox/*
+!handoff/inbox/README.md

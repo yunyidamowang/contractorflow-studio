@@ -1,0 +1,1 @@
+document.querySelector('#brief').onsubmit=e=>{e.preventDefault();const d=new FormData(e.target),o=document.querySelector('#brief-output');o.hidden=false;o.textContent='DEMO REQUIREMENTS BRIEF\nService: '+d.get('service')+'\nRequirements: '+d.get('requirements')+'\nNot submitted. Copy this brief into an approved handoff.';};

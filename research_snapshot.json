@@ -1,0 +1,46 @@
+[
+  {
+    "repo": "github/github-mcp-server",
+    "error": "HTTP Error 403: rate limit exceeded"
+  },
+  {
+    "repo": "activepieces/activepieces",
+    "error": "HTTP Error 403: rate limit exceeded"
+  },
+  {
+    "repo": "n8n-io/n8n",
+    "error": "HTTP Error 403: rate limit exceeded"
+  },
+  {
+    "repo": "baserow/baserow",
+    "error": "HTTP Error 403: rate limit exceeded"
+  },
+  {
+    "repo": "espocrm/espocrm",
+    "error": "HTTP Error 403: rate limit exceeded"
+  },
+  {
+    "repo": "py-pdf/pypdf",
+    "error": "HTTP Error 403: rate limit exceeded"
+  },
+  {
+    "repo": "python-pillow/Pillow",
+    "error": "HTTP Error 403: rate limit exceeded"
+  },
+  {
+    "repo": "paperless-ngx/paperless-ngx",
+    "error": "HTTP Error 403: rate limit exceeded"
+  },
+  {
+    "repo": "docling-project/docling",
+    "error": "HTTP Error 403: rate limit exceeded"
+  },
+  {
+    "repo": "openclaw/openclaw",
+    "error": "HTTP Error 403: rate limit exceeded"
+  },
+  {
+    "repo": "ollama/ollama",
+    "error": "HTTP Error 403: rate limit exceeded"
+  }
+]
