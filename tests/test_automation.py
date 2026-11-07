@@ -142,7 +142,7 @@ class AutomationTest(unittest.TestCase):
         # A bot sharing the owner's identity must not bypass first-demo isolation.
         class FakeAPI:
             def __init__(self, token):pass
-            def api(self, method, route):return {'full_name':'yunyidamowang/contractorflow-studio','private':True}
+            def api(self, method, route):return {'full_name':'yunyidamowang/contractorflow-studio','private':False}
             def pages(self, route):return [{'number':5},{'number':4}]
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp);token=root/'github.token';token.write_text('SYNTHETIC TOKEN');token.chmod(0o600)
@@ -151,6 +151,13 @@ class AutomationTest(unittest.TestCase):
                 once()
                 self.assertEqual(run.call_count,1)
                 self.assertEqual(run.call_args.args[1]['number'],4)
+                for repository in [
+                        {'full_name':'someone/other-project','private':False},
+                        {'full_name':'yunyidamowang/contractorflow-studio','private':True},
+                        {'full_name':'yunyidamowang/contractorflow-studio'}]:
+                    with patch.object(FakeAPI,'api',return_value=repository):
+                        with self.assertRaises(Blocked):once()
+                self.assertEqual(run.call_count,1)
 
 
 if __name__ == '__main__':unittest.main()

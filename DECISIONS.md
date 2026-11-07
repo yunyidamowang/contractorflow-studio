@@ -27,3 +27,5 @@
 - D019：先提交配置草稿PR；真实Demo Issue #4须完成用户专用登录/仓库Token授权和验证，之后才允许Grok自动接单。默认关闭，不安装launchd或self-hosted Actions runner。
 
 - D020：首次启用固定canary_issue=4，即使机器人和owner共用GitHub身份也不能执行其他Issue；用户真实验收后才手动改为null。
+
+- D021（2026-11-07）：用户选择继续GitHub Free并公开原仓库，已在获知历史个人邮箱、Issue身份说明及内部商业材料后明确坚持原样公开；不另建仓库、不购买套餐。最终网页确认由用户操作，之后先验证main保护再配置认证和单次canary。调度器改为只接受原指定公开仓库，其余限制不变。
