@@ -33,3 +33,7 @@ python3.12 -m venv .venv
 独立环境约58MiB，无Docker、常驻Agent或新模型。技术边界：结构化输入和确定性模板，不自动理解图纸/施工照片；操作员手工确认信息与附件槽位；缺项不代表施工质量结论。单操作员持钥管理全部样本客户，不提供生产多租户身份隔离。
 
 私有仓库：https://github.com/yunyidamowang/contractorflow-studio 。[HANDOFF](HANDOFF.md) 定义双AI交接；Grok已通过Issue提交研究，尚未验证的来源和商标状态见 [REQUIREMENTS_REVIEW.md](REQUIREMENTS_REVIEW.md)。生产安全项单列 [PRODUCTION_BACKLOG.md](PRODUCTION_BACKLOG.md)。禁止真实客户私人资料、上线门户或未经批准发布。
+
+## Grok → Codex 自动开发（首轮配置，默认关闭）
+
+见 [AUTOMATION.md](AUTOMATION.md)：本机ChatGPT登录CLI、codex-ready标签轮询、隔离检出、固定测试、草稿PR和Issue反馈。专用登录/本仓库Token尚待用户授权；真实模型端到端验收前不开放Grok自动执行。双击Automation Login.command完成官方账号登录；Automation Start/Stop.command供后续启停。验收范围见 [AUTOMATION_TEST_REPORT.md](AUTOMATION_TEST_REPORT.md)。

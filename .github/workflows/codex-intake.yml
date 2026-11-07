@@ -1,0 +1,47 @@
+{
+  "name": "Codex label intake \u2014 local worker",
+  "on": {
+    "issues": {
+      "types": [
+        "labeled"
+      ]
+    }
+  },
+  "permissions": {
+    "issues": "read"
+  },
+  "concurrency": {
+    "group": "cf-intake-${{ github.event.issue.number }}",
+    "cancel-in-progress": false
+  },
+  "jobs": {
+    "intake": {
+      "if": "github.repository == 'yunyidamowang/contractorflow-studio' && vars.CF_INTAKE_ENABLED == 'true' && vars.CF_AUTOMATION_STOP != 'true' && github.event.label.name == 'codex-ready'",
+      "runs-on": "ubuntu-latest",
+      "timeout-minutes": 2,
+      "permissions": {
+        "issues": "write"
+      },
+      "steps": [
+        {
+          "name": "Validate and register task",
+          "uses": "actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3",
+          "env": {
+            "ALLOWED_ACTORS": "${{ vars.CF_ALLOWED_ACTORS }}"
+          },
+          "with": {
+            "script": "const repo = context.repo;\nconst issue = context.payload.issue;\nconst actors = JSON.parse(process.env.ALLOWED_ACTORS || '[]');\nif (context.repo.owner + '/' + context.repo.repo !== 'yunyidamowang/contractorflow-studio') throw new Error('Wrong repository');\nif (!actors.includes(context.actor) || !actors.includes(issue.user.login)) throw new Error('Actor/author not allowlisted');\nconst {data: fresh} = await github.rest.issues.get({...repo, issue_number: issue.number});\nif (fresh.state !== 'open' || fresh.pull_request || fresh.labels.some(x => x.name === 'codex-stop') || !fresh.labels.some(x => x.name === 'codex-ready')) throw new Error('Task stopped/not ready');\nconst body = fresh.body || '';\nfor (const heading of ['Goal','Acceptance','Allowed paths','References']) {\n  if (!body.includes('## '+heading+'\\n') && !body.includes('## '+heading+'\\r\\n')) throw new Error('Missing structured section: '+heading);\n}\nconst marker = '<!-- cf-codex-intake:'+context.runId+' -->';\nawait github.rest.issues.createComment({...repo, issue_number: issue.number, body: marker+'\\nTask registered for the local worker. This workflow does not run Codex or spend API credits. The Mac must be awake and its explicitly enabled worker authenticated. No auto-merge. Worker status/failures appear in this Issue.'});\nawait core.summary.addHeading('Local Codex intake').addRaw('Issue #'+issue.number+' registered. No model invoked; local worker independently revalidates label actor and scope.').write();"
+          }
+        },
+        {
+          "name": "Record failure",
+          "if": "failure()",
+          "uses": "actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3",
+          "with": {
+            "script": "await github.rest.issues.createComment({...context.repo, issue_number: context.payload.issue.number, body: '<!-- cf-codex-intake-failed -->\\nIntake validation failed. Check the Actions run and allowlist/required task headings. No model invoked. Local worker remains independently gated.'});"
+          }
+        }
+      ]
+    }
+  }
+}
