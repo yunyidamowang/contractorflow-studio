@@ -1,5 +1,9 @@
 # 自动开发配置首轮验收
 
+## 最新真实前置验证（2026-11-07）
+
+仓库Public；main保护已实际拦截owner网页直接提交和项目PAT的同SHA无变更更新（HTTP422，要求PR），main SHA未变。新PAT已认证访问指定仓库，GitHub权限页确认仅本仓库metadata读及code/issues/pull requests读写，无用户权限；文件0600。项目独立CLI实际login status确认ChatGPT。旧暴露Token已从列表移除。真实原生隔离探针再次PASS，固定33项测试OK（0.909秒）。doctor在单次准备阶段enabled=true、stop=false、canary=4、登录及Token存在；真正认证和隔离由前述独立检查证明。已发canary ready，等待Grok标签。未执行真实once/模型/自动PR；下文历史结果不覆盖此状态。
+
 日期：2026-11-07（Asia/Shanghai）。仅虚构数据；默认enabled=false。以下结果不等于真实Codex账号→GitHub PR端到端验收。
 
 | 检查 | 已执行结果 |
