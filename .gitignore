@@ -9,3 +9,5 @@ artifacts/
 handoff/inbox/*
 !handoff/inbox/README.md
 output/
+.automation/
+work/

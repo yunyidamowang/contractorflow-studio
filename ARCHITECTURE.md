@@ -13,3 +13,5 @@ SQLite 表：clients、records（咨询/邮件/报价/待办/文件快照）、f
 邮件分类是关键词规则，草稿是固定模板，信息提取仅保存原文、类别、人工日期及建议；不是完整语义抽取。图片只按操作者提供的项目 ID 分类，不做视觉推断或近似去重。
 
 第二轮扩展：固定SAMPLE MODE（不存在真实数据开关），CF_BRAND配置候选品牌，/config只返回公开模式信息。records新增photo_report；followups表存六阶段样本估价、上次联系与下一步日期。报价包引用同客户附件ID，导出前重新检查归属、大小和SHA-256；ZIP含PDF/CSV/源笔记和原附件，累计附件限50MiB。邮件编辑撤回Needs Review，批准人仅记录local_owner，仍非独立审核身份。照片清单由人工关联槽位，仅检查资料齐备，不判断工程或开票资格。新文件保存原名以生成映射；历史未保存原名明确显示未知。
+
+自动开发控制平面独立于业务后台：GitHub标签 →（可选Actions登记）→ 本机Python轮询/broker → 固定SHA纯源码检出 → 无网络、仅检出可写的Codex权限profile → 固定测试 → 只创建codex分支和草稿PR → Issue摘要。GitHub凭据与模型/测试子进程分离；账本、专用登录和运行日志在Git忽略的.automation目录。业务data不进入检出；配置与风险见AUTOMATION.md。

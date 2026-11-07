@@ -1,0 +1,40 @@
+{
+  "name": "Optional official Codex Action probe — API billing not enabled",
+  "on": {
+    "workflow_dispatch": {}
+  },
+  "permissions": {
+    "contents": "read"
+  },
+  "concurrency": {
+    "group": "cf-cloud-probe",
+    "cancel-in-progress": false
+  },
+  "jobs": {
+    "probe": {
+      "if": "vars.CF_CLOUD_PROBE_ENABLED == 'true'",
+      "runs-on": "ubuntu-latest",
+      "timeout-minutes": 10,
+      "steps": [
+        {
+          "uses": "actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a",
+          "with": {
+            "persist-credentials": false
+          }
+        },
+        {
+          "name": "Official read-only probe",
+          "uses": "openai/codex-action@13e9c17417b29e9a276f73ec6ed7fb574137d3c3",
+          "with": {
+            "openai-api-key": "${{ secrets.OPENAI_API_KEY }}",
+            "codex-version": "0.144.6",
+            "safety-strategy": "drop-sudo",
+            "sandbox": "read-only",
+            "prompt": "Read README.md only. Explain SAMPLE MODE in one sentence. Do not modify files, run commands, open URLs, use MCP, deploy, send messages or create PRs.",
+            "allow-bots": false
+          }
+        }
+      ]
+    }
+  }
+}

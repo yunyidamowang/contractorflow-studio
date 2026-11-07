@@ -31,3 +31,13 @@
 | CF-R2-REVIEW | Grok遗漏、冲突与来源核验 | Codex | REQUIREMENTS_REVIEW；Allstate及全部12条未全部独立复核 |
 
 生产安全未完成工作独立维护于PRODUCTION_BACKLOG.md；不会关闭尚未完成验收的Issue。
+
+## 自动开发首轮（2026-11-07）
+
+| ID | 内容 | 状态 |
+|---|---|---|
+| CF-AUTO-CONFIG | 标签登记、白名单、本地受限CLI、预算/锁/停止、草稿PR及反馈 | 实现，默认关闭；待配置PR审核 |
+| CF-AUTO-TEST | 普通/真实受限环境测试、登记脚本和非敏感模拟 | 见AUTOMATION_TEST_REPORT；不冒充真实模型E2E |
+| CF-AUTO-AUTH | 专用ChatGPT登录、单仓库PAT、Grok真实身份、main保护 | 待用户一次性授权/核实 |
+| CF-AUTO-DEMO | Issue #4真实模型→测试→PR→Issue反馈 | 待授权；未加codex-ready |
+| CF-AUTO-OPS | 长期运行、休眠/重启、凭据过期及断电恢复 | 未验收；首轮不安装后台服务 |

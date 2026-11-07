@@ -38,3 +38,11 @@ Codex 接收后核验关键来源、区分事实与假设、记录需求编号�
 未来授权后用无敏感信息测试 Issue 验证：列工具 → 读取本仓库 → 按批准范围写测试 Issue → 回读 → 撤销并确认失败。任一步失败继续文件交接。按用户当前指示，暂不配置复杂 MCP。
 
 第二轮：用户最新品牌/价格决定以DECISIONS.md为准；交接核验见REQUIREMENTS_REVIEW.md；3分40秒演示见DEMO_WALKTHROUGH.md。研究资料处理登记见handoff/register.csv。Issue在完整验收前保持开放。
+
+## 自动开发提案（2026-11-07；覆盖此前禁止配置Actions的旧阶段限制）
+
+用户已授权搭建并模拟验证本仓库的自动调度，不授权自动合并、部署、真实资料或付费。当前开发分支提供codex-ready结构化模板与本机调度器；默认enabled=false，Grok身份尚未加入白名单，真实账号E2E未验收。首个授权Demo为Issue #4，不先加ready。账号步骤见AUTOMATION.md。
+
+Grok写Goal、Acceptance、Allowed paths、References四节；只填脱敏样本要求，不贴命令/凭据。owner完成专用登录、单仓库Token和真实Demo验收后，才白名单Grok作者及ready加标身份。后续无需逐任务转发聊天；修订作为不可信数据，移除再加ready才接收新一轮，每Issue终身最多两次。草稿PR由人验收，不能自动关闭未验收Issue。原文件交接继续有效。
+
+首次启用额外锁定canary_issue=4；GitHub身份白名单无法区分共用同一账号的Grok与用户，故须用户验收Issue #4后才手动解除canary锁。

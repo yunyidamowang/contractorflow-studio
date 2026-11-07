@@ -1,0 +1,12 @@
+{
+  "enabled": false,
+  "canary_issue": 4,
+  "allowed_actors": ["yunyidamowang"],
+  "max_attempts_per_issue": 2,
+  "max_runs_per_day": 3,
+  "timeout_seconds": 600,
+  "test_timeout_seconds": 180,
+  "poll_seconds": 120,
+  "retry_delay_seconds": 900,
+  "cli_version": "codex-cli 0.144.6"
+}
