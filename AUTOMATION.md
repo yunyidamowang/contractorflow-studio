@@ -1,5 +1,9 @@
 # Grok → Codex 自动开发：首轮受控配置
 
+## 2026-11-07 首次单次执行结果
+
+最新单次验收：已从合并后的main d158043运行一次once；attempt 1/2在源码快照下载4/66文件后因URLError停止，模型/固定canary测试/草稿PR尚未启动。worker自动失败回写成功，enabled=false已恢复，canary=4不变，无watch、无重试。独立基线33项OK（2.721秒），不等同canary测试阶段。详见handoff/outbox/CF-20261107-004.md。以下准备状态为历史记录。
+
 ## 2026-11-07 公开仓库适配（已公开，真实 canary 等待加标）
 
 最新实查：仓库 Public；main 要求 PR、审批人数0、管理员不得绕过、禁止强推与删除，自动合并关闭。所有者网页直接提交被拒绝；项目 PAT 对 main 同 SHA 的无变更更新返回 HTTP 422 `Changes must be made through a pull request.`，main 未变。专用 ChatGPT 登录成功，7天单仓库 PAT 已验证、0600保存，旧暴露 Token 已从列表移除。原生隔离探针及33项固定测试通过。已在 Issue #4 回复 `canary ready`，仅临时 enabled=true，保持 canary=4 和原限额；未启动长期轮询。真实模型/自动草稿PR/worker结果尚待一次执行验证。公开适配在 PR #6，本机从该分支运行；PR #6 不是 canary 产物。

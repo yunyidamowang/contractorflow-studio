@@ -1,5 +1,9 @@
 # 自动开发配置首轮验收
 
+## 2026-11-07 首次单次执行结果
+
+首次真实once已执行一次：源码下载4/66文件后URLError，账本blocked，worker自动失败回写成功，结束恢复enabled=false。模型及canary固定测试阶段未启动，未产生PR。独立基线33项OK（2.721秒）；隔离、认证、标签和main拦截前置检查通过。进程退出码0不能当作业务成功，须查账本状态。完整证据见handoff/outbox/CF-20261107-004.md。
+
 ## 最新真实前置验证（2026-11-07）
 
 仓库Public；main保护已实际拦截owner网页直接提交和项目PAT的同SHA无变更更新（HTTP422，要求PR），main SHA未变。新PAT已认证访问指定仓库，GitHub权限页确认仅本仓库metadata读及code/issues/pull requests读写，无用户权限；文件0600。项目独立CLI实际login status确认ChatGPT。旧暴露Token已从列表移除。真实原生隔离探针再次PASS，固定33项测试OK（0.909秒）。doctor在单次准备阶段enabled=true、stop=false、canary=4、登录及Token存在；真正认证和隔离由前述独立检查证明。已发canary ready，等待Grok标签。未执行真实once/模型/自动PR；下文历史结果不覆盖此状态。

@@ -1,5 +1,9 @@
 # Test report
 
+## 2026-11-07 首次单次执行结果
+
+首次真实canary结果：源码下载阶段网络URLError导致attempt 1/2失败，模型、固定canary测试、草稿PR均未启动。自动失败回写成功；main未变，enabled=false，canary=4。独立基线33项通过（2.721秒），不冒充canary测试通过。详见handoff/outbox/CF-20261107-004.md。
+
 日期：2026-11-06，macOS arm64 / Python 3.12 独立环境。
 
 已执行 `.venv/bin/python -m unittest discover -s tests -v`，11 项集成测试全部通过（测试使用临时数据目录）：
