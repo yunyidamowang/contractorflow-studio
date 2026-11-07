@@ -1,5 +1,7 @@
 # Decisions
 
+- D022（2026-11-07）：公开仓库main保护已通过网页和实际PAT无变更请求验证；单仓库Token不授予管理/Actions权限。仅为Issue #4临时开启一次执行，结束恢复关闭，不解除canary锁、不启动watch。凭据重复粘贴已在本机检测并去除完全相同的重复部分，不向日志或Issue输出原值；旧暴露Token已从GitHub列表移除。
+
 - 2026-11-06 / D001：在当前工作区 outputs/contractorflow-studio 建立独立仓库，避免影响其他项目。
 - D002：Python 3.12 + FastAPI + SQLite + Pillow + pypdf；使用 ReportLab 生成 PDF（pypdf 负责读取验证，不适合排版生成），原生 HTML/CSS/JS，无 Node 构建依赖。
 - D003：CSV 满足首版 Excel/CSV 输出；暂不增加 XLSX 依赖。报价输入为结构化表单，不用语言模型决定业务事实。按行 ROUND_HALF_UP 到 0.01 后求和；不假设税率、不混合 USD/AUD。
@@ -27,3 +29,5 @@
 - D019：先提交配置草稿PR；真实Demo Issue #4须完成用户专用登录/仓库Token授权和验证，之后才允许Grok自动接单。默认关闭，不安装launchd或self-hosted Actions runner。
 
 - D020：首次启用固定canary_issue=4，即使机器人和owner共用GitHub身份也不能执行其他Issue；用户真实验收后才手动改为null。
+
+- D021（2026-11-07）：用户选择继续GitHub Free并公开原仓库，已在获知历史个人邮箱、Issue身份说明及内部商业材料后明确坚持原样公开；不另建仓库、不购买套餐。最终网页确认由用户操作，之后先验证main保护再配置认证和单次canary。调度器改为只接受原指定公开仓库，其余限制不变。

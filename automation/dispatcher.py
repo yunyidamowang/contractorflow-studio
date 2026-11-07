@@ -433,8 +433,8 @@ def once():
         raise Blocked('GitHub token file must have mode 0600')
     api = GitHub(token)
     repo = api.api('GET', '')
-    if repo.get('full_name') != REPO or not repo.get('private'):
-        raise Blocked('Only the exact private repository is permitted')
+    if repo.get('full_name') != REPO or repo.get('private') is not False:
+        raise Blocked('Only the exact authorized public repository is permitted')
     with (RUNTIME / 'worker.lock').open('a') as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
