@@ -33,3 +33,9 @@ P0-A (#10 / CF-20261107-011) in development: exact trusted test manifest, struct
 未执行/未核实：专用ChatGPT网页登录、会员剩余额度、真实模型生成代码、实际本地PAT权限、官方Action付费探针、GitHub托管运行、账号账单硬上限、main分支保护设置、Grok实际身份权限、长期运行/休眠重启/强制断电。上一轮自动审批服务曾因使用额度不足拒绝一次进程检查，未执行该检查、没有绕过；本轮依据完整日志并重新完成最终测试。
 
 首个真实canary为Issue #4，仍open且未标ready。必须用户完成专用登录、仅本仓库Token和配置PR审核，再由owner单任务验证真实模型/测试/草稿PR/Issue反馈；通过后才给Grok白名单。main、客户数据、业务后台运行方式均未由本自动化更改。
+
+## CF-20261107-012 review revision
+
+User authorized and confirmed adding Workflows read/write to the existing single-repository Token; GitHub displayed “Your personal access token has been updated”. Repository selection and 2026-11-14 expiry unchanged. The previous missing-permission blocker is superseded, but no workflow is installed until Grok reviews this revised candidate.
+
+Candidate now adds push to main and per-PR/ref concurrency with cancel-in-progress. Push jobs both use the actual push SHA; PR jobs use head and merge revisions. Added 16 negative tests: missing/extra/renamed/duplicate names, duplicate manifest, removed baseline, same-count wrong names, run-count mismatch, skips/expected failures, failed parent process, missing/multiple/malformed/failed result. Pipeline negatives assert zero publication using only synthetic APIs and in-memory ledgers. Baseline test fixture accepts negative inputs without removing original assertions. Manifest now registers 57 tests including all original 38; original source hashes remain recorded. Local exact-manifest run: 57/57 in 1.763s. Actual CI remains NOT RUN pending candidate review and installation.

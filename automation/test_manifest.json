@@ -42,10 +42,11 @@
     "test_studio.StudioTest.test_13_corrupt_delivery"
   ],
   "baseline_files": {
-    "tests/test_automation.py": "23eda8e6a4cd6cafaf4a95e02783263b25c8a343e97e4e28d7f57b2c83306133",
+    "tests/test_automation.py": "7dcde7a2a003ae2a2c27f810eb8b8bce60a48571b3aa1587ec87e750d4fd95b4",
     "tests/test_snapshot_recovery.py": "b0a4173296b78fd8c2f0a4daa6356af1d352d02c18523b56e0b9831e6f81bcb4",
     "tests/test_studio.py": "a077dc72d8011f86eebe6208015647306db6d81eb49aa180be70921cda894a74",
-    "tests/test_trusted_tests.py": "078849d60943cfb9f80e2ac4da7545ca79fdd93df02e34770b0151320480e601"
+    "tests/test_trusted_tests.py": "078849d60943cfb9f80e2ac4da7545ca79fdd93df02e34770b0151320480e601",
+    "tests/test_test_policy_negative.py": "eb470c1d36f4189212c329e28df7869d8ae56c9bf36078cd44f4a6f196c142ff"
   },
   "tests": [
     "test_automation.AutomationTest.test_broker_cannot_merge_delete_or_write_main",
@@ -86,6 +87,22 @@
     "test_studio.StudioTest.test_11_pages",
     "test_studio.StudioTest.test_12_concurrent_idempotency",
     "test_studio.StudioTest.test_13_corrupt_delivery",
+    "test_test_policy_negative.PolicyNegativeTests.test_duplicate_discovered",
+    "test_test_policy_negative.PolicyNegativeTests.test_duplicate_manifest",
+    "test_test_policy_negative.PolicyNegativeTests.test_expected_failure",
+    "test_test_policy_negative.PolicyNegativeTests.test_extra_name",
+    "test_test_policy_negative.PolicyNegativeTests.test_failed_result_never_publishes",
+    "test_test_policy_negative.PolicyNegativeTests.test_malformed_result_never_publishes",
+    "test_test_policy_negative.PolicyNegativeTests.test_missing_name",
+    "test_test_policy_negative.PolicyNegativeTests.test_multiple_results_never_publish",
+    "test_test_policy_negative.PolicyNegativeTests.test_no_result_never_publishes",
+    "test_test_policy_negative.PolicyNegativeTests.test_parent_process_failure_never_publishes",
+    "test_test_policy_negative.PolicyNegativeTests.test_removed_original_baseline",
+    "test_test_policy_negative.PolicyNegativeTests.test_renamed_same_count",
+    "test_test_policy_negative.PolicyNegativeTests.test_run_count_mismatch",
+    "test_test_policy_negative.PolicyNegativeTests.test_same_count_wrong_names_never_publish",
+    "test_test_policy_negative.PolicyNegativeTests.test_skipped",
+    "test_test_policy_negative.PolicyNegativeTests.test_wrong_count_never_publishes",
     "test_trusted_tests.TrustedTests.test_baseline_tamper_rejected",
     "test_trusted_tests.TrustedTests.test_empty_collection_rejected",
     "test_trusted_tests.TrustedTests.test_names_and_failure_result"

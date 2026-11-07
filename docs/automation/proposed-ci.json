@@ -8,6 +8,11 @@
         "reopened",
         "ready_for_review"
       ]
+    },
+    "push": {
+      "branches": [
+        "main"
+      ]
     }
   },
   "permissions": {
@@ -31,7 +36,7 @@
         {
           "uses": "actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
           "with": {
-            "ref": "${{ matrix.revision == 'head' && github.event.pull_request.head.sha || github.sha }}",
+            "ref": "${{ github.event_name == 'pull_request' && matrix.revision == 'head' && github.event.pull_request.head.sha || github.sha }}",
             "persist-credentials": false
           }
         },
@@ -76,5 +81,9 @@
         }
       ]
     }
+  },
+  "concurrency": {
+    "group": "cf-ci-${{ github.event.pull_request.number || github.ref }}",
+    "cancel-in-progress": true
   }
 }

@@ -421,6 +421,20 @@ print('PASS isolation: checkout write, outside read denied, auth-root denied, gi
     child(sandbox(checkout, [sys.executable, '-c', probe]), checkout, 30, logdir / 'isolation.log', env)
 
 
+def verify_test_result(test_log, policy):
+    try:
+        records = [json.loads(line.removeprefix('CF_TEST_RESULT '))
+                   for line in test_log.splitlines() if line.startswith('CF_TEST_RESULT ')]
+        if (len(records) != 1 or not isinstance(records[0], dict)
+                or records[0].get('success') is not True
+                or type(records[0].get('count')) is not int
+                or records[0]['count'] != len(policy['tests'])
+                or records[0].get('tests') != sorted(policy['tests'])):
+            raise ValueError('mismatch')
+    except (ValueError, TypeError, KeyError):
+        raise Blocked('Trusted test manifest/result mismatch') from None
+
+
 def run_issue(api, issue, config, db):
     number = int(issue['number'])
     events = api.pages(f'/issues/{number}/events')
@@ -464,11 +478,7 @@ def run_issue(api, issue, config, db):
         child(sandbox(checkout, [sys.executable, '-c', runner, str(checkout), json.dumps(policy)]), checkout,
               min(config['test_timeout_seconds'], max(1, int(api.deadline-time.monotonic()))), run / 'tests.log', env, revoked)
         test_log = (run / 'tests.log').read_text(errors='replace')
-        records = [json.loads(line.removeprefix('CF_TEST_RESULT ')) for line in test_log.splitlines() if line.startswith('CF_TEST_RESULT ')]
-        if (len(records) != 1 or records[0].get('success') is not True
-                or records[0].get('count') != len(policy['tests'])
-                or records[0].get('tests') != sorted(policy['tests'])):
-            raise Blocked('Trusted test manifest/result mismatch')
+        verify_test_result(test_log, policy)
         if diff(checkout, task['allowed_paths']) != changes:
             raise Blocked('Working files changed during tests; review before publication')
         if revoked() or stopped():

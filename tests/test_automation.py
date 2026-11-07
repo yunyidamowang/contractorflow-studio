@@ -91,7 +91,7 @@ class AutomationTest(unittest.TestCase):
                     child([sys.executable, '-c', 'raise AssertionError()'], root, 2, root/'stopped-log', clean_env(root,root))
                 self.assertFalse((root/'stopped-log').exists())
 
-    def pipeline(self, fail=False, mutate=False):
+    def pipeline(self, fail=False, mutate=False, test_log=None, test_exit=False):
         # Supervisor/state/feedback flow with explicit fake Git, model, test worker and API.
         # This does not authenticate, invoke a model, or claim real GitHub E2E.
         class FakeAPI:
@@ -116,6 +116,8 @@ class AutomationTest(unittest.TestCase):
             else:
                 policy = json.loads((ROOT/'automation/test_manifest.json').read_text())
                 log.write_text('SIMULATED TEST WORKER\nCF_TEST_RESULT '+json.dumps({'success': True, 'count': len(policy['tests']), 'tests': sorted(policy['tests'])})+'\n')
+                if test_log is not None:log.write_text(test_log)
+                if test_exit:raise Blocked('Synthetic test process failed')
                 if mutate:(checkout/'docs/sample.md').write_text('Changed during tests\n')
         def fake_diff(checkout, paths):
             return [('docs/sample.md', (checkout/'docs/sample.md').read_bytes(), '100644')]
@@ -125,12 +127,12 @@ class AutomationTest(unittest.TestCase):
             db.execute('CREATE TABLE runs(id INTEGER PRIMARY KEY,issue INTEGER,trigger TEXT,status TEXT,started REAL,day TEXT,result TEXT)')
             api=FakeAPI();config={'allowed_actors':['owner'],'max_attempts_per_issue':2,'max_runs_per_day':3,'retry_delay_seconds':60,'timeout_seconds':30,'test_timeout_seconds':30}
             with patch('automation.dispatcher.RUNTIME',root), patch('automation.dispatcher.preflight'), patch('automation.dispatcher.child',side_effect=fake_child), patch('automation.dispatcher.prepare'), patch('automation.dispatcher.diff',side_effect=fake_diff):
-                if fail or mutate:
+                if fail or mutate or test_log is not None or test_exit:
                     with self.assertRaises(Blocked):run_issue(api,issue(),config,db)
                 else:run_issue(api,issue(),config,db)
-                self.assertEqual(db.execute('SELECT status FROM runs').fetchone()[0], 'blocked' if fail or mutate else 'pr')
-                self.assertEqual(len(api.publications),0 if fail or mutate else 1)
-                self.assertIn('Needs attention' if fail or mutate else 'Draft PR',api.feedbacks[-1])
+                self.assertEqual(db.execute('SELECT status FROM runs').fetchone()[0], 'blocked' if fail or mutate or test_log is not None or test_exit else 'pr')
+                self.assertEqual(len(api.publications),0 if fail or mutate or test_log is not None or test_exit else 1)
+                self.assertIn('Needs attention' if fail or mutate or test_log is not None or test_exit else 'Draft PR',api.feedbacks[-1])
                 with self.assertRaises(Blocked):reserve(db,12,'9',config)
 
     def test_simulated_issue_model_tests_pr_feedback(self):self.pipeline()

@@ -77,3 +77,9 @@ PDF 已用 pypdf 提取验证 155.00，并用 Poppler 渲染人工查看单页�
 41 local tests pass (38 retained baseline + 3 policy tests); exact manifest runner also exercised. New CI head/merge workflow pending actual GitHub execution. No automatic task/model run, no ledger changes. Native Mac validation recorded separately in P0_CI.md.
 
 Native macOS archived-source isolation check passed; exact-manifest suite passed 41/41 in 25.384s. Ledger hash unchanged. GitHub PAT rejected workflow upload (missing workflow permission); CI not executed. P0-A partial implementation only; B/C/D paused.
+
+## CF-20261107-012 review revision
+
+User authorized and confirmed adding Workflows read/write to the existing single-repository Token; GitHub displayed “Your personal access token has been updated”. Repository selection and 2026-11-14 expiry unchanged. The previous missing-permission blocker is superseded, but no workflow is installed until Grok reviews this revised candidate.
+
+Candidate now adds push to main and per-PR/ref concurrency with cancel-in-progress. Push jobs both use the actual push SHA; PR jobs use head and merge revisions. Added 16 negative tests: missing/extra/renamed/duplicate names, duplicate manifest, removed baseline, same-count wrong names, run-count mismatch, skips/expected failures, failed parent process, missing/multiple/malformed/failed result. Pipeline negatives assert zero publication using only synthetic APIs and in-memory ledgers. Baseline test fixture accepts negative inputs without removing original assertions. Manifest now registers 57 tests including all original 38; original source hashes remain recorded. Local exact-manifest run: 57/57 in 1.763s. Actual CI remains NOT RUN pending candidate review and installation.

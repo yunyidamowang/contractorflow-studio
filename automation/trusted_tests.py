@@ -22,7 +22,9 @@ def validate(root, manifest):
             raise ValueError('Baseline test source changed: '+name)
     suite = unittest.defaultTestLoader.discover(str(root/'tests'))
     names = [test.id() for test in flatten(suite)]
-    if not names or len(names) != len(set(names)) or set(names) != set(manifest['tests']):
+    if (not names or len(names) != len(set(names))
+            or len(manifest['tests']) != len(set(manifest['tests']))
+            or set(names) != set(manifest['tests'])):
         raise ValueError('Discovered test names differ from trusted manifest')
     return suite, names
 

@@ -59,3 +59,9 @@ PR #5 已合并，main 与本地源码树相同，Git历史同步尚缺本机凭
 用户已明确接受公开前审查发现的历史邮箱、身份说明和商业资料，选择公开原仓库。公开前检查覆盖远程全部可枚举引用、7提交、113历史文件版本及全部Issue/PR讨论；未发现实际凭据。已补强.gitignore并适配调度器只接受原指定公开仓库，拒绝其他仓库或未确认可见性；33项测试通过（1.445秒）。GitHub最终确认交用户亲自操作；main保护、专用认证和真实canary待后续，不启动长期轮询。
 
 P0-A blocked: local + Mac isolated 41/41 pass, but GitHub rejected workflow upload with existing PAT. Review PR contains policy only; CI pending authorized workflow installation. B/C/D paused; no permission expansion.
+
+## CF-20261107-012 review revision
+
+User authorized and confirmed adding Workflows read/write to the existing single-repository Token; GitHub displayed “Your personal access token has been updated”. Repository selection and 2026-11-14 expiry unchanged. The previous missing-permission blocker is superseded, but no workflow is installed until Grok reviews this revised candidate.
+
+Candidate now adds push to main and per-PR/ref concurrency with cancel-in-progress. Push jobs both use the actual push SHA; PR jobs use head and merge revisions. Added 16 negative tests: missing/extra/renamed/duplicate names, duplicate manifest, removed baseline, same-count wrong names, run-count mismatch, skips/expected failures, failed parent process, missing/multiple/malformed/failed result. Pipeline negatives assert zero publication using only synthetic APIs and in-memory ledgers. Baseline test fixture accepts negative inputs without removing original assertions. Manifest now registers 57 tests including all original 38; original source hashes remain recorded. Local exact-manifest run: 57/57 in 1.763s. Actual CI remains NOT RUN pending candidate review and installation.
