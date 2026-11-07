@@ -71,3 +71,9 @@ PDF 已用 pypdf 提取验证 155.00，并用 Poppler 渲染人工查看单页�
 后续前置验收：仓库Public、有效main保护、项目ChatGPT认证及新PAT均真实验证；PAT无变更直接更新main返回422要求PR，main未变。原生隔离探针PASS，33项OK（0.909秒）。旧暴露Token已移除。已发送canary ready；真实模型及自动开发PR尚待Grok加标后的单次执行。
 
 用户明确接受审查发现的信息后要求公开原仓库。调度器仅接受指定公开仓库，新增错误仓库、私有响应及缺失可见性字段的拒绝断言，保留Issue #4锁定检查。完整unittest仍33项OK（1.445秒）；git check-ignore验证认证、日志、数据库及新增.env变体/密钥忽略规则，git diff --check通过。仓库可见性、main保护和真实canary尚未因此验证通过。
+
+## P0-A / Issue #10
+
+41 local tests pass (38 retained baseline + 3 policy tests); exact manifest runner also exercised. New CI head/merge workflow pending actual GitHub execution. No automatic task/model run, no ledger changes. Native Mac validation recorded separately in P0_CI.md.
+
+Native macOS archived-source isolation check passed; exact-manifest suite passed 41/41 in 25.384s. Ledger hash unchanged. GitHub PAT rejected workflow upload (missing workflow permission); CI not executed. P0-A partial implementation only; B/C/D paused.

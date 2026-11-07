@@ -1,5 +1,7 @@
 # Tasks
 
+P0-A (#10 / CF-20261107-011) in development: exact trusted test manifest, structured results and independent head/merge CI. 38 original names retained, 3 new validator tests registered. CI runtime evidence pending; no P0 completion claim. enabled=false/canary=4; historical canary records untouched. See docs/automation/P0_CI.md.
+
 ## 2026-11-07 快照修复待审
 
 只读GET最多3次、0.5/1秒退避、遵守任务截止时间；写请求不重试。加入脱敏错误分类、blob及完整Git树校验、相同SHA去重、完整下载后写入。38项测试通过；固定d158043快照66/66真实只读预检通过，独立Git校验一致，账本未变、模型未调用。enabled=false、canary=4；最后一次canary仍须合并修复并另获用户批准。详见handoff/outbox/CF-20261107-005.md。
@@ -55,3 +57,5 @@ PR #5 已合并，main 与本地源码树相同，Git历史同步尚缺本机凭
 ## 公开仓库恢复准备
 
 用户已明确接受公开前审查发现的历史邮箱、身份说明和商业资料，选择公开原仓库。公开前检查覆盖远程全部可枚举引用、7提交、113历史文件版本及全部Issue/PR讨论；未发现实际凭据。已补强.gitignore并适配调度器只接受原指定公开仓库，拒绝其他仓库或未确认可见性；33项测试通过（1.445秒）。GitHub最终确认交用户亲自操作；main保护、专用认证和真实canary待后续，不启动长期轮询。
+
+P0-A blocked: local + Mac isolated 41/41 pass, but GitHub rejected workflow upload with existing PAT. Review PR contains policy only; CI pending authorized workflow installation. B/C/D paused; no permission expansion.

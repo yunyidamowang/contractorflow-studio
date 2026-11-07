@@ -114,7 +114,8 @@ class AutomationTest(unittest.TestCase):
                 (checkout/'docs').mkdir();(checkout/'docs/sample.md').write_text('SAMPLE MODE\n')
                 log.write_text('SIMULATED MODEL; no inference')
             else:
-                log.write_text('SIMULATED TEST WORKER\nRan 20 tests in 0.1s\nOK\n')
+                policy = json.loads((ROOT/'automation/test_manifest.json').read_text())
+                log.write_text('SIMULATED TEST WORKER\nCF_TEST_RESULT '+json.dumps({'success': True, 'count': len(policy['tests']), 'tests': sorted(policy['tests'])})+'\n')
                 if mutate:(checkout/'docs/sample.md').write_text('Changed during tests\n')
         def fake_diff(checkout, paths):
             return [('docs/sample.md', (checkout/'docs/sample.md').read_bytes(), '100644')]

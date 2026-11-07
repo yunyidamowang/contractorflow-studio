@@ -48,7 +48,8 @@ def allowed_path(path):
     p = PurePosixPath(path)
     return (not p.is_absolute() and all(x not in ('.', '..') and not x.startswith('.') for x in path.split('/'))
             and path not in PROTECTED and path not in ('tests/test_automation.py',)
-            and (path.startswith(('app/', 'tests/', 'docs/')) or path in ('README.md', 'DEMO_WALKTHROUGH.md', 'TRIAL_SCOPE.md')))
+            and not path.startswith('tests/')
+            and (path.startswith(('app/', 'docs/')) or path in ('README.md', 'DEMO_WALKTHROUGH.md', 'TRIAL_SCOPE.md')))
 
 
 def parse_task(issue, comments):
@@ -458,12 +459,16 @@ def run_issue(api, issue, config, db):
                '-C', str(checkout), '-c', 'forced_login_method="chatgpt"', prompt], checkout,
                min(config['timeout_seconds'], max(1, int(api.deadline-time.monotonic()))), run / 'codex.jsonl', env, revoked)
         changes = diff(checkout, task['allowed_paths'])
-        child(sandbox(checkout, [sys.executable, '-m', 'unittest', 'discover', '-s', 'tests', '-v']), checkout,
+        policy = json.loads((ROOT / 'automation/test_manifest.json').read_text())
+        runner = (ROOT / 'automation/trusted_tests.py').read_text()
+        child(sandbox(checkout, [sys.executable, '-c', runner, str(checkout), json.dumps(policy)]), checkout,
               min(config['test_timeout_seconds'], max(1, int(api.deadline-time.monotonic()))), run / 'tests.log', env, revoked)
         test_log = (run / 'tests.log').read_text(errors='replace')
-        count = re.search(r'Ran (\d+) tests?', test_log)
-        if not count or int(count[1]) < 20 or not re.search(r'^OK\s*$', test_log, re.M):
-            raise Blocked('Test suite did not confirm at least 20 passing tests')
+        records = [json.loads(line.removeprefix('CF_TEST_RESULT ')) for line in test_log.splitlines() if line.startswith('CF_TEST_RESULT ')]
+        if (len(records) != 1 or records[0].get('success') is not True
+                or records[0].get('count') != len(policy['tests'])
+                or records[0].get('tests') != sorted(policy['tests'])):
+            raise Blocked('Trusted test manifest/result mismatch')
         if diff(checkout, task['allowed_paths']) != changes:
             raise Blocked('Working files changed during tests; review before publication')
         if revoked() or stopped():
