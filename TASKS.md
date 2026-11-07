@@ -1,5 +1,9 @@
 # Tasks
 
+## 2026-11-07 首次单次执行结果
+
+CF-AUTO-DEMO首次单次验收：attempt 1/2因源码下载URLError失败，真实模型/固定canary测试/草稿PR均未启动，worker失败回写已验证。enabled=false、canary=4，未自动重试；剩余1次须重新授权与加标。独立基线33项通过，见handoff/outbox/CF-20261107-004.md。
+
 最新自动化状态（2026-11-07）：公开和main保护真实验证通过；项目ChatGPT认证、新单仓库PAT验证通过，旧暴露凭据已移除。33项测试OK（0.909秒）、原生隔离探针PASS。Issue #4 已回写canary ready，等待Grok加标；仅canary=4临时启用，无watch。尚未执行真实模型和自动PR；以下旧阶段记录保留作历史。
 
 更新：2026-11-06（Asia/Shanghai）
