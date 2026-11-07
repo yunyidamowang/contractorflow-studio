@@ -1,5 +1,9 @@
 # Grok → Codex 自动开发：首轮受控配置
 
+## 2026-11-07 快照修复待审
+
+只读GET最多3次、0.5/1秒退避、遵守任务截止时间；写请求不重试。加入脱敏错误分类、blob及完整Git树校验、相同SHA去重、完整下载后写入。38项测试通过；固定d158043快照66/66真实只读预检通过，独立Git校验一致，账本未变、模型未调用。enabled=false、canary=4；最后一次canary仍须合并修复并另获用户批准。详见handoff/outbox/CF-20261107-005.md。
+
 ## 2026-11-07 公开仓库适配（已公开，真实 canary 等待加标）
 
 最新实查：仓库 Public；main 要求 PR、审批人数0、管理员不得绕过、禁止强推与删除，自动合并关闭。所有者网页直接提交被拒绝；项目 PAT 对 main 同 SHA 的无变更更新返回 HTTP 422 `Changes must be made through a pull request.`，main 未变。专用 ChatGPT 登录成功，7天单仓库 PAT 已验证、0600保存，旧暴露 Token 已从列表移除。原生隔离探针及33项固定测试通过。已在 Issue #4 回复 `canary ready`，仅临时 enabled=true，保持 canary=4 和原限额；未启动长期轮询。真实模型/自动草稿PR/worker结果尚待一次执行验证。公开适配在 PR #6，本机从该分支运行；PR #6 不是 canary 产物。

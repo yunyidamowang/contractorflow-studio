@@ -1,5 +1,9 @@
 # Test report
 
+## 2026-11-07 快照修复待审
+
+只读GET最多3次、0.5/1秒退避、遵守任务截止时间；写请求不重试。加入脱敏错误分类、blob及完整Git树校验、相同SHA去重、完整下载后写入。38项测试通过；固定d158043快照66/66真实只读预检通过，独立Git校验一致，账本未变、模型未调用。enabled=false、canary=4；最后一次canary仍须合并修复并另获用户批准。详见handoff/outbox/CF-20261107-005.md。
+
 日期：2026-11-06，macOS arm64 / Python 3.12 独立环境。
 
 已执行 `.venv/bin/python -m unittest discover -s tests -v`，11 项集成测试全部通过（测试使用临时数据目录）：
