@@ -1,5 +1,6 @@
 {
   "enabled": false,
+  "canary_issue": 4,
   "allowed_actors": ["yunyidamowang"],
   "max_attempts_per_issue": 2,
   "max_runs_per_day": 3,

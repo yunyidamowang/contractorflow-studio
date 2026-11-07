@@ -6,7 +6,7 @@ import tempfile
 import time
 import unittest
 from unittest.mock import patch
-from automation.dispatcher import Blocked, GitHub, MARKER, ROOT, actor_gate, allowed_path, child, clean_env, diff, parse_task, prepare, reserve, run_issue
+from automation.dispatcher import Blocked, GitHub, MARKER, ROOT, actor_gate, allowed_path, child, clean_env, diff, parse_task, prepare, reserve, run_issue, once
 import sys
 
 
@@ -137,6 +137,20 @@ class AutomationTest(unittest.TestCase):
     def test_simulated_failure_is_reported_and_not_looped(self):self.pipeline(fail=True)
 
     def test_mutation_during_tests_cannot_publish(self):self.pipeline(mutate=True)
+
+    def test_first_activation_is_locked_to_canary(self):
+        # A bot sharing the owner's identity must not bypass first-demo isolation.
+        class FakeAPI:
+            def __init__(self, token):pass
+            def api(self, method, route):return {'full_name':'yunyidamowang/contractorflow-studio','private':True}
+            def pages(self, route):return [{'number':5},{'number':4}]
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp);token=root/'github.token';token.write_text('SYNTHETIC TOKEN');token.chmod(0o600)
+            config={'enabled':True,'cli_version':'codex-cli 0.144.6','canary_issue':4,'allowed_actors':['owner']}
+            with patch('automation.dispatcher.RUNTIME',root),patch('automation.dispatcher.settings',return_value=config),patch('automation.dispatcher.subprocess.check_output',return_value='codex-cli 0.144.6'),patch('automation.dispatcher.GitHub',FakeAPI),patch('automation.dispatcher.run_issue') as run:
+                once()
+                self.assertEqual(run.call_count,1)
+                self.assertEqual(run.call_args.args[1]['number'],4)
 
 
 if __name__ == '__main__':unittest.main()

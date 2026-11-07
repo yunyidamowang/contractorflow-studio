@@ -26,9 +26,9 @@ GitHub权限依据：[GITHUB_TOKEN](https://docs.github.com/en/actions/concepts/
 ## 首个真实Demo验收后才开放Grok
 
 1. 首轮模拟和实际沙箱探针见AUTOMATION_TEST_REPORT.md。登录/Token完成后，先只允许owner创建下面的无敏感Demo，不能把旧商业Issue批量标ready。
-2. `.automation/settings.json`设enabled=true，保持allowed_actors仅owner。STOP存在时由owner手动移除本项目的STOP文件；不重置state.db或尝试计数。
+2. `.automation/settings.json`设enabled=true，保持allowed_actors仅owner，canary_issue=4（默认）。即使Grok共用owner身份，也只能处理该测试Issue。STOP存在时由owner手动移除本项目的STOP文件；不重置state.db或尝试计数。
 3. 给Demo Issue添加codex-ready，运行 `.venv/bin/python -m automation.dispatcher once`，验证**真实**模型修改、固定测试、草稿PR、原Issue反馈。检查分支diff、费用和私有文件未进入快照。失败不宣称成功，保留日志。
-4. 用户验收该Demo后，才加入已验证Grok身份，双击 `Automation Start.command`。此后Grok写结构化Issue并加ready即可；修订评论也是不可信输入，移除再加ready才接受新一轮，最多两次总尝试。
+4. 用户验收该Demo后，才手动将canary_issue改为null并加入已验证Grok身份，双击 `Automation Start.command`。此后Grok写结构化Issue并加ready即可；修订评论也是不可信输入，移除再加ready才接受新一轮，最多两次总尝试。
 
 ```markdown
 ## Goal

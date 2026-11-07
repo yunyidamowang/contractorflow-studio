@@ -166,6 +166,9 @@ class GitHub:
 
 def settings():
     config = json.loads((RUNTIME / 'settings.json').read_text())
+    config.setdefault('canary_issue', 4)
+    if config['canary_issue'] is not None and (type(config['canary_issue']) is not int or config['canary_issue'] < 1):
+        raise Blocked('Canary must be a positive Issue number or null after manual acceptance')
     for key, minimum, maximum in [('max_attempts_per_issue', 1, 2), ('max_runs_per_day', 1, 3),
             ('timeout_seconds', 30, 600), ('test_timeout_seconds', 30, 180), ('poll_seconds', 60, 3600), ('retry_delay_seconds', 60, 86400)]:
         if type(config.get(key)) is not int or not minimum <= config[key] <= maximum:
@@ -442,6 +445,8 @@ def once():
             db.execute('CREATE TABLE IF NOT EXISTS notices(issue INTEGER,key TEXT,PRIMARY KEY(issue,key))')
             issues = api.pages('/issues?state=open&labels=codex-ready&sort=created&direction=asc')
             for issue in issues:
+                if config['canary_issue'] is not None and issue['number'] != config['canary_issue']:
+                    continue
                 try:
                     run_issue(api, issue, config, db)
                     return
@@ -507,6 +512,7 @@ def main():
     if command == 'doctor':
         config = settings()
         print(json.dumps({'enabled': config['enabled'], 'stop': stopped(), 'codex': shutil.which('codex'),
+            'canary_issue_only': config['canary_issue'],
             'project_chatgpt_login_present': (RUNTIME / 'codex-home/auth.json').is_file(),
             'project_github_token_present': (RUNTIME / 'github.token').is_file(),
             'warning': 'presence is not authentication or isolation verification'}, indent=2));return

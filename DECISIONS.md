@@ -25,3 +25,5 @@
 - D017：新自动任务只能经白名单作者和加标人、codex-ready结构化Issue；原文/评论/链接均不可信，不执行资料命令。仅纯源码固定SHA快照，无其他项目/客户资料。
 - D018：并发1，每日UTC最多3次、每Issue最多2次、模型600秒、测试180秒、整任务20分钟截止；限制不是美元/token硬上限。没有API回退、购买、merge、删除或部署能力。
 - D019：先提交配置草稿PR；真实Demo Issue #4须完成用户专用登录/仓库Token授权和验证，之后才允许Grok自动接单。默认关闭，不安装launchd或self-hosted Actions runner。
+
+- D020：首次启用固定canary_issue=4，即使机器人和owner共用GitHub身份也不能执行其他Issue；用户真实验收后才手动改为null。
