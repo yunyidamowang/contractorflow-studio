@@ -1,5 +1,9 @@
 # 自动开发配置首轮验收
 
+## 2026-11-07 快照修复待审
+
+只读GET最多3次、0.5/1秒退避、遵守任务截止时间；写请求不重试。加入脱敏错误分类、blob及完整Git树校验、相同SHA去重、完整下载后写入。38项测试通过；固定d158043快照66/66真实只读预检通过，独立Git校验一致，账本未变、模型未调用。enabled=false、canary=4；最后一次canary仍须合并修复并另获用户批准。详见handoff/outbox/CF-20261107-005.md。
+
 ## 最新真实前置验证（2026-11-07）
 
 仓库Public；main保护已实际拦截owner网页直接提交和项目PAT的同SHA无变更更新（HTTP422，要求PR），main SHA未变。新PAT已认证访问指定仓库，GitHub权限页确认仅本仓库metadata读及code/issues/pull requests读写，无用户权限；文件0600。项目独立CLI实际login status确认ChatGPT。旧暴露Token已从列表移除。真实原生隔离探针再次PASS，固定33项测试OK（0.909秒）。doctor在单次准备阶段enabled=true、stop=false、canary=4、登录及Token存在；真正认证和隔离由前述独立检查证明。已发canary ready，等待Grok标签。未执行真实once/模型/自动PR；下文历史结果不覆盖此状态。

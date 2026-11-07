@@ -14,6 +14,9 @@ from pathlib import Path, PurePosixPath
 import re
 import shutil
 import signal
+import socket
+import ssl
+import http.client
 import sqlite3
 import subprocess
 import sys
@@ -100,15 +103,36 @@ class GitHub:
             data=None if data is None else json.dumps(data).encode(), method=method,
             headers={'Authorization': 'Bearer '+self.token, 'Accept': 'application/vnd.github+json',
                      'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'contractorflow-controlled-worker'})
-        try:
-            with urllib.request.build_opener(NoRedirect()).open(request, timeout=20) as response:
-                raw = response.read(12_000_001)
-                if len(raw) > 12_000_000:
-                    raise Blocked('GitHub response too large')
-                return json.loads(raw)
-        except urllib.error.HTTPError as exc:
-            # Do not echo response bodies, request headers or tokens into logs/Issues.
-            raise Blocked('GitHub HTTP '+str(exc.code)+'; check repository-scoped permissions') from None
+        for attempt in range(1, 4 if method == 'GET' else 2):
+            remaining = 20 if self.deadline is None else min(20, self.deadline-time.monotonic())
+            if remaining <= 0 or stopped():
+                raise Blocked('Task deadline or STOP reached')
+            try:
+                with urllib.request.build_opener(NoRedirect()).open(request, timeout=remaining) as response:
+                    raw = response.read(12_000_001)
+                    if self.deadline is not None and time.monotonic() >= self.deadline:
+                        raise Blocked('Total task deadline reached')
+                    if len(raw) > 12_000_000:
+                        raise Blocked('GitHub response too large')
+                    return json.loads(raw)
+            except (urllib.error.URLError, TimeoutError, ConnectionError, ssl.SSLError, http.client.IncompleteRead) as exc:
+                reason = exc.reason if isinstance(exc, urllib.error.URLError) else exc
+                status = exc.code if isinstance(exc, urllib.error.HTTPError) else None
+                category = ('http' if status else 'dns' if isinstance(reason, socket.gaierror)
+                            else 'tls' if isinstance(reason, ssl.SSLError)
+                            else 'timeout' if isinstance(reason, TimeoutError) else 'connection')
+                retry = method == 'GET' and attempt < 3 and (status is None or status in (408, 500, 502, 503, 504))
+                if isinstance(reason, ssl.SSLCertVerificationError):
+                    retry = False
+                # Never serialize exception text, URLs, headers or request/response bodies.
+                audit('github_network_error', method=method, category=category,
+                      status=status, attempt=attempt, retry=retry)
+                if not retry:
+                    raise Blocked('GitHub '+category+' failure'+(' HTTP '+str(status) if status else '')+'; request stopped') from None
+                delay = 0.5 * 2**(attempt-1)
+                if self.deadline is not None and time.monotonic()+delay >= self.deadline:
+                    raise Blocked('Total task deadline reached') from None
+                time.sleep(delay)
 
     def pages(self, route):
         rows = []
@@ -123,31 +147,78 @@ class GitHub:
         return self.api('POST', f'/issues/{number}/comments', {'body': MARKER+'\n'+message+'\nNo auto-merge. SAMPLE tasks only.'})
 
     def snapshot(self, checkout):
+        if checkout.is_symlink() or not checkout.is_dir() or any(checkout.iterdir()):
+            raise Blocked('Snapshot requires an empty real directory')
+        repo = self.api('GET', '')
+        if repo.get('full_name') != REPO or repo.get('private') is not False:
+            raise Blocked('Snapshot repository identity mismatch')
         ref = self.api('GET', '/git/ref/heads/main')['object']['sha']
         commit = self.api('GET', '/git/commits/'+ref)
+        if commit.get('sha') != ref:
+            raise Blocked('Commit identity mismatch')
         tree_sha = commit['tree']['sha']
         tree = self.api('GET', '/git/trees/'+tree_sha+'?recursive=1')
         if tree.get('truncated') or len(tree['tree']) > 500:
             raise Blocked('Repository snapshot exceeds bounded size')
+        if tree.get('sha') != tree_sha:
+            raise Blocked('Tree identity mismatch')
         size = 0
+        pending = []
+        cache = {}
+        seen = set()
         for entry in tree['tree']:
+            path = PurePosixPath(entry['path'])
+            if (entry['path'] in seen or str(path) != entry['path'] or not path.parts
+                    or path.is_absolute() or '..' in path.parts or '\x00' in entry['path']
+                    or path.parts[0] in ('.codex', '.agents', '.automation', '.git', 'data', 'backups')):
+                raise Blocked('Unsafe snapshot path')
+            seen.add(entry['path'])
             if entry['type'] == 'tree':
                 continue
-            path = PurePosixPath(entry['path'])
             if (entry['type'] != 'blob' or entry['mode'] not in ('100644', '100755') or path.is_absolute()
                     or '..' in path.parts or path.parts[0] in ('.codex', '.agents', '.automation', '.git', 'data', 'backups')):
                 raise Blocked('Unsafe snapshot entry')
-            size += entry.get('size', 0)
+            if type(entry.get('size')) is not int or entry['size'] < 0:
+                raise Blocked('Invalid snapshot file size')
+            size += entry['size']
             if size > 5_000_000:
                 raise Blocked('Repository snapshot exceeds 5 MB')
-            blob = self.api('GET', '/git/blobs/'+entry['sha'])
-            content = base64.b64decode(blob['content'], validate=False)
+            if entry['sha'] not in cache:
+                blob = self.api('GET', '/git/blobs/'+entry['sha'])
+                if blob.get('sha') != entry['sha'] or blob.get('encoding') != 'base64':
+                    raise Blocked('Blob identity mismatch')
+                content = base64.b64decode(''.join(blob['content'].split()), validate=True)
+                actual = hashlib.sha1(b'blob '+str(len(content)).encode()+b'\0'+content).hexdigest()
+                if actual != entry['sha'] or blob.get('size') != len(content):
+                    raise Blocked('Blob hash or size mismatch')
+                cache[entry['sha']] = content
+            content = cache[entry['sha']]
             if len(content) != entry.get('size', len(content)):
                 raise Blocked('Snapshot blob size mismatch')
+            pending.append((path, content, entry['mode']))
+        # Reconstruct every Git tree, including mode and filename ordering.
+        def verify_tree(parent, expected):
+            children = [e for e in tree['tree'] if str(PurePosixPath(e['path']).parent) == parent]
+            raw = b''
+            for e in sorted(children, key=lambda e: (PurePosixPath(e['path']).name+('/' if e['type']=='tree' else '')).encode()):
+                if e['type'] == 'tree':
+                    if e['mode'] != '040000':
+                        raise Blocked('Invalid tree mode')
+                    verify_tree(e['path'], e['sha'])
+                raw += e['mode'].lstrip('0').encode()+b' '+PurePosixPath(e['path']).name.encode()+b'\0'+bytes.fromhex(e['sha'])
+            if hashlib.sha1(b'tree '+str(len(raw)).encode()+b'\0'+raw).hexdigest() != expected:
+                raise Blocked('Git tree hash mismatch')
+        directories = {e['path'] for e in tree['tree'] if e['type'] == 'tree'}
+        if any(str(PurePosixPath(e['path']).parent) not in directories | {'.'} for e in tree['tree']):
+            raise Blocked('Snapshot contains an orphan entry')
+        verify_tree('.', tree_sha)
+        if stopped() or (self.deadline is not None and time.monotonic() >= self.deadline):
+            raise Blocked('Task deadline or STOP reached')
+        for path, content, mode in pending:
             target = checkout / str(path)
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(content)
-            target.chmod(int(entry['mode'][-3:], 8))
+            target.chmod(int(mode[-3:], 8))
         return ref, tree_sha
 
     def publish(self, number, attempt, base, tree_sha, changes):
