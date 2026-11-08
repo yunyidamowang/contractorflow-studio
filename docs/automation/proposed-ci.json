@@ -1,0 +1,89 @@
+{
+  "name": "ContractorFlow independent CI",
+  "on": {
+    "pull_request": {
+      "types": [
+        "opened",
+        "synchronize",
+        "reopened",
+        "ready_for_review"
+      ]
+    },
+    "push": {
+      "branches": [
+        "main"
+      ]
+    }
+  },
+  "permissions": {
+    "contents": "read"
+  },
+  "jobs": {
+    "tests": {
+      "name": "cf-tests (${{ matrix.revision }})",
+      "runs-on": "ubuntu-latest",
+      "timeout-minutes": 10,
+      "strategy": {
+        "fail-fast": false,
+        "matrix": {
+          "revision": [
+            "head",
+            "merge"
+          ]
+        }
+      },
+      "steps": [
+        {
+          "uses": "actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+          "with": {
+            "ref": "${{ github.event_name == 'pull_request' && matrix.revision == 'head' && github.event.pull_request.head.sha || github.sha }}",
+            "persist-credentials": false
+          }
+        },
+        {
+          "uses": "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
+          "with": {
+            "python-version": "3.12"
+          }
+        },
+        {
+          "name": "Record actual source revision",
+          "env": {
+            "HEAD_SHA": "${{ github.event.pull_request.head.sha }}",
+            "BASE_SHA": "${{ github.event.pull_request.base.sha }}"
+          },
+          "run": "git rev-parse HEAD\npython -c \"import os; print({k:os.environ[k] for k in ('HEAD_SHA','BASE_SHA')})\""
+        },
+        {
+          "name": "Install approved pinned dependencies",
+          "run": "python -m pip install -r requirements.txt"
+        },
+        {
+          "name": "Run exact trusted manifest",
+          "run": "python -c 'from automation.trusted_tests import main; raise SystemExit(main())' . \"$(cat automation/test_manifest.json)\""
+        }
+      ]
+    },
+    "gate": {
+      "name": "cf-ci-gate",
+      "if": "${{ always() }}",
+      "needs": [
+        "tests"
+      ],
+      "runs-on": "ubuntu-latest",
+      "timeout-minutes": 1,
+      "steps": [
+        {
+          "env": {
+            "TEST_RESULT": "${{ needs.tests.result }}"
+          },
+          "run": "test \"$TEST_RESULT\" = success"
+        }
+      ]
+    }
+  },
+  "concurrency": {
+    "group": "cf-ci-${{ github.event.pull_request.number || github.ref }}",
+    "cancel-in-progress": true
+  }
+}

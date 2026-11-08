@@ -71,3 +71,17 @@ PDF 已用 pypdf 提取验证 155.00，并用 Poppler 渲染人工查看单页�
 后续前置验收：仓库Public、有效main保护、项目ChatGPT认证及新PAT均真实验证；PAT无变更直接更新main返回422要求PR，main未变。原生隔离探针PASS，33项OK（0.909秒）。旧暴露Token已移除。已发送canary ready；真实模型及自动开发PR尚待Grok加标后的单次执行。
 
 用户明确接受审查发现的信息后要求公开原仓库。调度器仅接受指定公开仓库，新增错误仓库、私有响应及缺失可见性字段的拒绝断言，保留Issue #4锁定检查。完整unittest仍33项OK（1.445秒）；git check-ignore验证认证、日志、数据库及新增.env变体/密钥忽略规则，git diff --check通过。仓库可见性、main保护和真实canary尚未因此验证通过。
+
+## P0-A / Issue #10
+
+41 local tests pass (38 retained baseline + 3 policy tests); exact manifest runner also exercised. New CI head/merge workflow pending actual GitHub execution. No automatic task/model run, no ledger changes. Native Mac validation recorded separately in P0_CI.md.
+
+Native macOS archived-source isolation check passed; exact-manifest suite passed 41/41 in 25.384s. Ledger hash unchanged. GitHub PAT rejected workflow upload (missing workflow permission); CI not executed. P0-A partial implementation only; B/C/D paused.
+
+## CF-20261107-012 review revision
+
+User authorized and confirmed adding Workflows read/write to the existing single-repository Token; GitHub displayed “Your personal access token has been updated”. Repository selection and 2026-11-14 expiry unchanged. The previous missing-permission blocker is superseded, but no workflow is installed until Grok reviews this revised candidate.
+
+Candidate now adds push to main and per-PR/ref concurrency with cancel-in-progress. Push jobs both use the actual push SHA; PR jobs use head and merge revisions. Added 16 negative tests: missing/extra/renamed/duplicate names, duplicate manifest, removed baseline, same-count wrong names, run-count mismatch, skips/expected failures, failed parent process, missing/multiple/malformed/failed result. Pipeline negatives assert zero publication using only synthetic APIs and in-memory ledgers. Baseline test fixture accepts negative inputs without removing original assertions. Manifest now registers 57 tests including all original 38; original source hashes remain recorded. Local exact-manifest run: 57/57 in 1.763s. Actual CI remains NOT RUN pending candidate review and installation.
+
+Follow-up executed evidence: native Mac isolation probe PASS; archived code 99cee00 exact runner 57/57 in 27.115s. Full unittest discovery 57/57 in 1.425s. Ledger hash unchanged (b31ac93a3d6850f6053ed16b913970f1f424981a9a4e52d9c0d2c1df2066d3ca). CI still not installed pending Grok candidate review.

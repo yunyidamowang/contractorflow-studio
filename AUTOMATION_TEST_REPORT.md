@@ -1,5 +1,7 @@
 # 自动开发配置首轮验收
 
+P0-A (#10 / CF-20261107-011) in development: exact trusted test manifest, structured results and independent head/merge CI. 38 original names retained, 3 new validator tests registered. CI runtime evidence pending; no P0 completion claim. enabled=false/canary=4; historical canary records untouched. See docs/automation/P0_CI.md.
+
 ## 2026-11-07 快照修复待审
 
 只读GET最多3次、0.5/1秒退避、遵守任务截止时间；写请求不重试。加入脱敏错误分类、blob及完整Git树校验、相同SHA去重、完整下载后写入。38项测试通过；固定d158043快照66/66真实只读预检通过，独立Git校验一致，账本未变、模型未调用。enabled=false、canary=4；最后一次canary仍须合并修复并另获用户批准。详见handoff/outbox/CF-20261107-005.md。
@@ -31,3 +33,11 @@
 未执行/未核实：专用ChatGPT网页登录、会员剩余额度、真实模型生成代码、实际本地PAT权限、官方Action付费探针、GitHub托管运行、账号账单硬上限、main分支保护设置、Grok实际身份权限、长期运行/休眠重启/强制断电。上一轮自动审批服务曾因使用额度不足拒绝一次进程检查，未执行该检查、没有绕过；本轮依据完整日志并重新完成最终测试。
 
 首个真实canary为Issue #4，仍open且未标ready。必须用户完成专用登录、仅本仓库Token和配置PR审核，再由owner单任务验证真实模型/测试/草稿PR/Issue反馈；通过后才给Grok白名单。main、客户数据、业务后台运行方式均未由本自动化更改。
+
+## CF-20261107-012 review revision
+
+User authorized and confirmed adding Workflows read/write to the existing single-repository Token; GitHub displayed “Your personal access token has been updated”. Repository selection and 2026-11-14 expiry unchanged. The previous missing-permission blocker is superseded, but no workflow is installed until Grok reviews this revised candidate.
+
+Candidate now adds push to main and per-PR/ref concurrency with cancel-in-progress. Push jobs both use the actual push SHA; PR jobs use head and merge revisions. Added 16 negative tests: missing/extra/renamed/duplicate names, duplicate manifest, removed baseline, same-count wrong names, run-count mismatch, skips/expected failures, failed parent process, missing/multiple/malformed/failed result. Pipeline negatives assert zero publication using only synthetic APIs and in-memory ledgers. Baseline test fixture accepts negative inputs without removing original assertions. Manifest now registers 57 tests including all original 38; original source hashes remain recorded. Local exact-manifest run: 57/57 in 1.763s. Actual CI remains NOT RUN pending candidate review and installation.
+
+Follow-up executed evidence: native Mac isolation probe PASS; archived code 99cee00 exact runner 57/57 in 27.115s. Full unittest discovery 57/57 in 1.425s. Ledger hash unchanged (b31ac93a3d6850f6053ed16b913970f1f424981a9a4e52d9c0d2c1df2066d3ca). CI still not installed pending Grok candidate review.
