@@ -42,6 +42,30 @@
           }
         }
       ]
+    },
+    "gate-report": {
+      "name": "Report intake gate",
+      "runs-on": "ubuntu-latest",
+      "timeout-minutes": 1,
+      "permissions": {},
+      "steps": [
+        {
+          "name": "Write gate summary",
+          "env": {
+            "GATE_REPOSITORY": "${{ github.repository == 'yunyidamowang/contractorflow-studio' }}",
+            "GATE_INTAKE_ENABLED": "${{ vars.CF_INTAKE_ENABLED == 'true' }}",
+            "GATE_STOP_CLEAR": "${{ vars.CF_AUTOMATION_STOP != 'true' }}",
+            "GATE_LABEL": "${{ github.event.label.name == 'codex-ready' }}",
+            "GATE_ISSUE_OPEN": "${{ github.event.issue.state == 'open' }}",
+            "GATE_NOT_PULL_REQUEST": "${{ github.event.issue.pull_request == null }}",
+            "ACTOR": "${{ github.actor }}",
+            "AUTHOR": "${{ github.event.issue.user.login }}",
+            "ALLOWED_ACTORS": "${{ vars.CF_ALLOWED_ACTORS }}",
+            "LABEL_NAMES": "${{ toJSON(github.event.issue.labels.*.name) }}"
+          },
+          "run": "node <<'CF_GATE_REPORT'\n'use strict';\nconst fs = require('node:fs');\n\nconst SKIP_NAMES = [\n  'repository_matches',\n  'intake_enabled',\n  'automation_stop_clear',\n  'event_label_is_codex_ready',\n];\n\nfunction flag(env, key) {\n  const value = env[key];\n  if (value === 'true') return true;\n  if (value === 'false') return false;\n  return null;\n}\n\nfunction readStringArray(raw) {\n  if (raw == null || raw === '' || raw === 'null') return null;\n  let parsed;\n  try {\n    parsed = JSON.parse(raw);\n  } catch {\n    return null;\n  }\n  if (!Array.isArray(parsed) || parsed.some((item) => typeof item !== 'string')) return null;\n  return parsed;\n}\n\nfunction reportIntakeGate(env) {\n  const lines = [];\n  const unknown = [];\n  const intakeBlocked = [];\n  const registrationBlocked = [];\n\n  function record(bucket, name, value, code) {\n    if (value === true) lines.push('- ' + name + ': passed');\n    else if (value === false) {\n      lines.push('- ' + name + ': blocked');\n      bucket.push(code);\n    } else {\n      lines.push('- ' + name + ': unknown');\n      unknown.push(name);\n    }\n  }\n\n  record(intakeBlocked, 'repository_matches', flag(env, 'GATE_REPOSITORY'), 'wrong_repository');\n  record(intakeBlocked, 'intake_enabled', flag(env, 'GATE_INTAKE_ENABLED'), 'intake_disabled');\n  record(intakeBlocked, 'automation_stop_clear', flag(env, 'GATE_STOP_CLEAR'), 'automation_stop');\n  record(intakeBlocked, 'event_label_is_codex_ready', flag(env, 'GATE_LABEL'), 'wrong_label');\n\n  const actors = readStringArray(env.ALLOWED_ACTORS);\n  if (actors === null) {\n    record(registrationBlocked, 'allowlist_configured', null, 'allowlist_missing');\n    record(registrationBlocked, 'actor_allowlisted', null, 'wrong_actor');\n    record(registrationBlocked, 'author_allowlisted', null, 'wrong_author');\n  } else {\n    record(registrationBlocked, 'allowlist_configured', true, 'allowlist_missing');\n    record(registrationBlocked, 'actor_allowlisted', actors.includes(env.ACTOR || ''), 'wrong_actor');\n    record(registrationBlocked, 'author_allowlisted', actors.includes(env.AUTHOR || ''), 'wrong_author');\n  }\n\n  const labelNames = readStringArray(env.LABEL_NAMES);\n  if (labelNames === null) {\n    record(registrationBlocked, 'stop_label_absent', null, 'stop_label_present');\n    record(registrationBlocked, 'ready_label_present', null, 'ready_label_missing');\n  } else {\n    record(registrationBlocked, 'stop_label_absent', !labelNames.includes('codex-stop'), 'stop_label_present');\n    record(registrationBlocked, 'ready_label_present', labelNames.includes('codex-ready'), 'ready_label_missing');\n  }\n\n  record(registrationBlocked, 'issue_open', flag(env, 'GATE_ISSUE_OPEN'), 'issue_not_open');\n  record(registrationBlocked, 'not_pull_request', flag(env, 'GATE_NOT_PULL_REQUEST'), 'pull_request');\n\n  const intakeUnknown = unknown.filter((name) => SKIP_NAMES.includes(name));\n  const registrationUnknown = unknown.filter((name) => !SKIP_NAMES.includes(name));\n  const intakeJob = intakeBlocked.length ? 'skipped' : (intakeUnknown.length ? 'unknown' : 'runs');\n  const registrationState = registrationBlocked.length ? 'blocked' : (registrationUnknown.length ? 'unknown' : 'clear');\n  const text = [\n    '# Intake gate report',\n    '',\n    'This job does not register tasks or write to issues, comments, labels, or the repository.',\n    'Each condition is passed, blocked, or unknown. Variable values, actor names, and allowlists are not printed.',\n    'Label, actor, author, and issue state come from the triggering event. Structured section checks stay in the intake job.',\n    '',\n    'intake_job: ' + intakeJob,\n    'intake_blocked: ' + (intakeBlocked.join(',') || 'none'),\n    'registration_precheck: ' + registrationState,\n    'registration_blocked: ' + (registrationBlocked.join(',') || 'none'),\n    'unknown: ' + (unknown.join(',') || 'none'),\n    '',\n    '## Conditions',\n  ].concat(lines, ['']).join('\\n');\n  return {text, intakeJob, intakeBlocked, registrationBlocked, unknown, registrationState};\n}\n\nfunction emit(env) {\n  const result = reportIntakeGate(env);\n  if (env.GITHUB_STEP_SUMMARY) fs.appendFileSync(env.GITHUB_STEP_SUMMARY, result.text);\n  process.stdout.write(result.text);\n  if (result.intakeBlocked.length || result.registrationBlocked.length) {\n    const codes = result.intakeBlocked.concat(result.registrationBlocked).join(',');\n    const title = result.intakeBlocked.length ? 'Intake job skipped' : 'Intake registration blocked';\n    process.stdout.write('::warning title=' + title + '::' + codes + '\\n');\n  } else if (result.unknown.length) {\n    process.stdout.write('::warning title=Intake gate unknown::' + result.unknown.join(',') + '\\n');\n  } else {\n    process.stdout.write('::notice title=Intake gates clear::no blocking intake condition\\n');\n  }\n}\n\nemit(process.env);\nCF_GATE_REPORT\n"
+        }
+      ]
     }
   }
 }
