@@ -59,6 +59,7 @@ ELECTRICAL = Decimal("640.00")
 SUBTOTAL = CABINET + ELECTRICAL
 
 FOOTER = "SAMPLE — fictional data — not a real client"
+COVER_FOOTER = "North Pine Demo Builders · fictional job NP-1042 · not a real client"
 
 BANNED = (
     "contractorflow",
@@ -151,20 +152,38 @@ def money(value: Decimal) -> str:
     return f"{quant:,.2f}"
 
 
+def outside(bbox, box, slack=0.8) -> bool:
+    x0, y0, x1, y1 = bbox
+    left, top, right, bottom = box
+    return x0 < left - slack or y0 < top - slack or x1 > right + slack or y1 > bottom + slack
+
+
 class Art:
-    """RGB canvas that remembers every string it draws."""
+    """RGB canvas that remembers every string and the box it must fit."""
 
     def __init__(self, width: int, height: int, fill: tuple[int, int, int]):
         self.image = Image.new("RGB", (width, height), fill)
         self.draw = ImageDraw.Draw(self.image)
         self.texts: list[str] = []
+        self.placements: list[tuple[str, tuple, tuple]] = []
         self.w = width
         self.h = height
 
-    def text(self, xy, value, face, fill, anchor="lt"):
+    def text(self, xy, value, face, fill, anchor="lt", box=None):
         if value:
             self.texts.append(value)
+        bbox = self.draw.textbbox(xy, value, font=face, anchor=anchor)
+        limit = box if box is not None else (1, 1, self.w - 1, self.h - 1)
+        self.placements.append((value, bbox, limit))
         self.draw.text(xy, value, font=face, fill=fill, anchor=anchor)
+
+    def overflows(self) -> list[str]:
+        found = []
+        for value, bbox, limit in self.placements:
+            if outside(bbox, limit):
+                snippet = value if len(value) <= 48 else value[:45] + "..."
+                found.append(f"{snippet!r} bbox {tuple(round(v, 1) for v in bbox)} outside {tuple(round(v, 1) for v in limit)}")
+        return found
 
     def save(self, path: Path):
         self.image.save(path, "PNG", dpi=(72, 72))
@@ -179,12 +198,15 @@ def card(art: Art, x, y, w, h, radius=16):
     rounded(art, (x, y, x + w, y + h), radius, WHITE)
 
 
-def pill(art: Art, right, cy, label, fg, bg, face, width):
+def pill(art: Art, right, cy, label, fg, bg, face, width, bounds=None):
     height = face.size + 18
     x = right - width
     y = cy - height / 2
-    rounded(art, (x, y, x + width, y + height), height / 2, bg)
-    art.text((x + width / 2, cy), label, face, fg, "mm")
+    rect = (x, y, x + width, y + height)
+    rounded(art, rect, height / 2, bg)
+    if bounds is not None:
+        art.placements.append((f"{label} pill", rect, bounds))
+    art.text((x + width / 2, cy), label, face, fg, "mm", box=(x + 6, y + 2, x + width - 6, y + height - 2))
 
 
 def checkbox(art: Art, x, y, size, checked):
@@ -213,18 +235,35 @@ def kicker(art: Art, y):
     sample_size = max(40, int(art.h * 0.072))
     face = font("bold", sample_size)
     x = int(art.w * 0.05)
-    art.text((x, y), "SAMPLE", face, PINE, "lt")
+    row_bottom = y + sample_size + 4
+    art.text((x, y), "SAMPLE", face, PINE, "lt", box=(x, y, art.w * 0.46, row_bottom))
     note_size = max(22, int(art.h * 0.034))
     note = font("bold", note_size)
     label = "Fictional data"
-    art.text((art.w - x, y + (sample_size - note_size) / 2), label, note, PINE, "rt")
+    art.text(
+        (art.w - x - 2, y + (sample_size - note_size) / 2),
+        label,
+        note,
+        PINE,
+        "rt",
+        box=(art.w * 0.54, y, art.w - x, row_bottom),
+    )
     return y + sample_size
 
 
-def footer_line(art: Art, text, y):
-    size = max(15, int(art.h * 0.024))
+def footer_line(art: Art, text):
+    """Draw the cover footer in the band above the bottom rule, fully inside that band."""
+    bar = max(6, art.h // 110)
+    margin = max(28, int(art.w * 0.045))
+    band_bottom = art.h - bar - 8
+    band_top = band_bottom - max(28, int(art.h * 0.055))
+    box = (margin, band_top, art.w - margin, band_bottom)
+    size = max(15, int(art.h * 0.023))
     face = font("regular", size)
-    art.text((art.w / 2, y), text, face, MUTED, "mt")
+    while size > 13 and face.getlength(text) > (box[2] - box[0]):
+        size -= 1
+        face = font("regular", size)
+    art.text(((box[0] + box[2]) / 2, (box[1] + box[3]) / 2), text, face, MUTED, "mm", box=box)
 
 
 def cover_packet(w, h):
@@ -233,25 +272,26 @@ def cover_packet(w, h):
     art.draw.rectangle((0, 0, left, h), fill=PINE)
     art.draw.rectangle((left, 0, left + 6, h), fill=BRASS)
     pad = int(left * 0.09)
+    panel = (pad, 12, left - 16, h - 12)
     sample = fit_font("bold", "SAMPLE", left - pad * 2, max(42, int(h * 0.078)))
-    art.text((pad, int(h * 0.09)), "SAMPLE", sample, GOLD, "lt")
+    art.text((pad, int(h * 0.09)), "SAMPLE", sample, GOLD, "lt", box=panel)
     title_size = max(52, int(h * 0.118))
     quote = fit_font("bold", "Quote", left - pad * 2, title_size)
     packet = fit_font("bold", "Packet", left - pad * 2, title_size)
     y = int(h * 0.20)
-    art.text((pad, y), "Quote", quote, WHITE, "lt")
+    art.text((pad, y), "Quote", quote, WHITE, "lt", box=panel)
     y += int(quote.size * 1.02)
-    art.text((pad, y), "Packet", packet, WHITE, "lt")
+    art.text((pad, y), "Packet", packet, WHITE, "lt", box=panel)
     y += int(packet.size * 1.18)
     art.draw.rectangle((pad, y, pad + int(left * 0.22), y + 4), fill=BRASS)
     y += int(h * 0.045)
     sub = fit_font("bold", "Before and after", left - pad * 2, max(24, int(h * 0.042)))
-    art.text((pad, y), "Before and after", sub, MIST, "lt")
+    art.text((pad, y), "Before and after", sub, MIST, "lt", box=panel)
     company = fit_font("regular", "North Pine Demo Builders", left - pad * 2, max(16, int(h * 0.028)))
     job = fit_font("regular", "Fictional job NP-1042", left - pad * 2, max(15, int(h * 0.024)))
-    art.text((pad, h - int(h * 0.145)), "North Pine Demo Builders", company, MIST, "lt")
-    art.text((pad, h - int(h * 0.098)), "Fictional job NP-1042", job, (186, 214, 198), "lt")
-    art.text((pad, h - int(h * 0.055)), "Fictional data", font("bold", max(16, int(h * 0.026))), GOLD, "lt")
+    art.text((pad, h - int(h * 0.145)), "North Pine Demo Builders", company, MIST, "lt", box=panel)
+    art.text((pad, h - int(h * 0.098)), "Fictional job NP-1042", job, (186, 214, 198), "lt", box=panel)
+    art.text((pad, h - int(h * 0.055)), "Fictional data", font("bold", max(16, int(h * 0.026))), GOLD, "lt", box=panel)
 
     gap = int(w * 0.018)
     outer = int(w * 0.028)
@@ -267,10 +307,11 @@ def cover_packet(w, h):
 
 def _before_card(art: Art, x, y, w, h):
     card(art, x, y, w, h)
+    inner = (x + 16, y + 16, x + w - 16, y + h - 12)
     art.draw.rounded_rectangle((x, y, x + w, y + 10), radius=8, fill=BRICK)
     art.draw.rectangle((x, y + 6, x + w, y + 12), fill=BRICK)
     label = fit_font("bold", "BEFORE", w - 40, max(26, int(h * 0.07)))
-    art.text((x + 24, y + int(h * 0.07)), "BEFORE", label, BRICK, "lt")
+    art.text((x + 24, y + int(h * 0.07)), "BEFORE", label, BRICK, "lt", box=inner)
     names = ["IMG_4481.jpg", "quote FINAL v7.pdf", "scan (3).pdf", "site notes.docx"]
     top = y + int(h * 0.20)
     bottom = y + h - int(h * 0.12)
@@ -280,18 +321,19 @@ def _before_card(art: Art, x, y, w, h):
         cy = top + row_h * index + row_h / 2
         indent = (8, 28, 4, 22)[index]
         art.draw.ellipse((x + 20 + indent, cy - 5, x + 32 + indent, cy + 7), fill=CLAY)
-        face = fit_font("mono", name, w - 64 - indent, face_size, 12)
-        art.text((x + 40 + indent, cy), name, face, INK, "lm")
+        face = fit_font("mono", name, w - 72 - indent, face_size, 12)
+        art.text((x + 40 + indent, cy), name, face, INK, "lm", box=inner)
     cap = font("regular", max(13, int(h * 0.038)))
-    art.text((x + 24, y + h - int(h * 0.065)), "Names as received", cap, MUTED, "lt")
+    art.text((x + 24, y + h - int(h * 0.065)), "Names as received", cap, MUTED, "lt", box=inner)
 
 
 def _after_card(art: Art, x, y, w, h):
     card(art, x, y, w, h)
+    inner = (x + 16, y + 16, x + w - 16, y + h - 12)
     art.draw.rectangle((x, y + 6, x + w, y + 12), fill=PINE)
     art.draw.rounded_rectangle((x, y, x + w, y + 10), radius=8, fill=PINE)
     label = fit_font("bold", "AFTER", w - 40, max(26, int(h * 0.07)))
-    art.text((x + 24, y + int(h * 0.07)), "AFTER", label, PINE, "lt")
+    art.text((x + 24, y + int(h * 0.07)), "AFTER", label, PINE, "lt", box=inner)
     rows = [("01", "Site notes"), ("02", "Cabinet quote"), ("03", "Follow-up list"), ("04", "Photo names")]
     top = y + int(h * 0.20)
     bottom = y + h - int(h * 0.12)
@@ -300,25 +342,32 @@ def _after_card(art: Art, x, y, w, h):
     for index, (number, name) in enumerate(rows):
         cy = top + row_h * index + row_h / 2
         art.draw.ellipse((x + 24, cy - radius, x + 24 + radius * 2, cy + radius), fill=PINE)
-        num_face = fit_font("bold", number, radius * 1.7, max(12, int(radius * 0.85)), 10)
-        art.text((x + 24 + radius, cy), number, num_face, WHITE, "mm")
-        face = fit_font("bold", name, w - radius * 2 - 64, max(16, int(h * 0.048)), 13)
-        art.text((x + 40 + radius * 2, cy), name, face, INK, "lm")
+        num_face = fit_font("bold", number, radius * 1.6, max(12, int(radius * 0.8)), 10)
+        art.text(
+            (x + 24 + radius, cy),
+            number,
+            num_face,
+            WHITE,
+            "mm",
+            box=(x + 24, cy - radius, x + 24 + radius * 2, cy + radius),
+        )
+        face = fit_font("bold", name, w - radius * 2 - 72, max(16, int(h * 0.048)), 13)
+        art.text((x + 40 + radius * 2, cy), name, face, INK, "lm", box=inner)
     cap = font("regular", max(13, int(h * 0.038)))
-    art.text((x + 24, y + h - int(h * 0.065)), "Renamed and grouped", cap, MUTED, "lt")
+    art.text((x + 24, y + h - int(h * 0.065)), "Renamed and grouped", cap, MUTED, "lt", box=inner)
 
 
 def cover_followup(w, h):
     art = Art(w, h, PAPER)
     hairline(art)
     kicker(art, int(h * 0.055))
-    title = fit_font("bold", "Follow-Up List", int(w * 0.9), max(48, int(h * 0.09)))
-    art.text((int(w * 0.05), int(h * 0.155)), "Follow-Up List", title, INK, "lt")
-    sub = font("bold", max(22, int(h * 0.038)))
-    art.text((int(w * 0.05), int(h * 0.255)), "Status sheet", sub, MUTED, "lt")
     margin = int(w * 0.05)
+    title = fit_font("bold", "Follow-Up List", int(w * 0.9), max(48, int(h * 0.09)))
+    art.text((margin, int(h * 0.155)), "Follow-Up List", title, INK, "lt", box=(margin, int(h * 0.15), w - margin, int(h * 0.25)))
+    sub = font("bold", max(22, int(h * 0.038)))
+    art.text((margin, int(h * 0.255)), "Status sheet", sub, MUTED, "lt", box=(margin, int(h * 0.25), w - margin, int(h * 0.32)))
     top = int(h * 0.33)
-    height = int(h * 0.56)
+    height = int(h * 0.52)
     card(art, margin, top, w - margin * 2 - 6, height)
     rows = [
         ("Cabinet quote", "Waiting", "Confirm the figure"),
@@ -327,11 +376,7 @@ def cover_followup(w, h):
         ("Electrical extra", "Received", "Filed, no chase"),
     ]
     _status_table(art, margin, top, w - margin * 2 - 6, height, rows, "NEXT STEP")
-    footer_line(
-        art,
-        "North Pine Demo Builders  ·  fictional job NP-1042  ·  not a real client",
-        int(h * 0.945),
-    )
+    footer_line(art, COVER_FOOTER)
     return art
 
 
@@ -339,13 +384,13 @@ def cover_photo(w, h):
     art = Art(w, h, PAPER)
     hairline(art)
     kicker(art, int(h * 0.05))
-    title = fit_font("bold", "Exception Report", int(w * 0.9), max(46, int(h * 0.082)))
-    art.text((int(w * 0.05), int(h * 0.145)), "Exception Report", title, INK, "lt")
-    sub = font("bold", max(20, int(h * 0.034)))
-    art.text((int(w * 0.05), int(h * 0.238)), "Missing and unclear shots", sub, MUTED, "lt")
     margin = int(w * 0.05)
+    title = fit_font("bold", "Exception Report", int(w * 0.9), max(46, int(h * 0.082)))
+    art.text((margin, int(h * 0.145)), "Exception Report", title, INK, "lt", box=(margin, int(h * 0.14), w - margin, int(h * 0.23)))
+    sub = font("bold", max(20, int(h * 0.034)))
+    art.text((margin, int(h * 0.238)), "Missing and unclear shots", sub, MUTED, "lt", box=(margin, int(h * 0.23), w - margin, int(h * 0.30)))
     top = int(h * 0.31)
-    height = int(h * 0.575)
+    height = int(h * 0.52)
     card(art, margin, top, w - margin * 2 - 6, height)
     rows = [
         ("Before", "before-kitchen-01.png", "Present", SAGE, False),
@@ -355,11 +400,7 @@ def cover_photo(w, h):
         ("Completion", "completion-05.png", "Missing", None, True),
     ]
     _photo_table(art, margin, top, w - margin * 2 - 6, height, rows)
-    footer_line(
-        art,
-        "North Pine Demo Builders  ·  fictional job NP-1042  ·  flag means the file",
-        int(h * 0.945),
-    )
+    footer_line(art, COVER_FOOTER)
     return art
 
 
@@ -369,9 +410,9 @@ def _status_table(art: Art, x, y, w, h, rows, next_header):
     art.draw.rectangle((x, y, x + w, y + header_h), fill=MIST)
     head = font("bold", max(13, int(h * 0.045)))
     cy = y + header_h / 2
-    art.text((x + pad, cy), "ITEM", head, PINE, "lm")
-    art.text((x + w * 0.46, cy), "STATUS", head, PINE, "lm")
-    art.text((x + w * 0.68, cy), next_header, head, PINE, "lm")
+    art.text((x + pad, cy), "ITEM", head, PINE, "lm", box=(x + pad, y + 4, x + w * 0.42, y + header_h - 2))
+    art.text((x + w * 0.46, cy), "STATUS", head, PINE, "lm", box=(x + w * 0.44, y + 4, x + w * 0.66, y + header_h - 2))
+    art.text((x + w * 0.68, cy), next_header, head, PINE, "lm", box=(x + w * 0.68, y + 4, x + w - pad, y + header_h - 2))
     body = h - header_h
     row_h = body / len(rows)
     pill_face = font("bold", max(14, int(row_h * 0.28)))
@@ -391,12 +432,14 @@ def _status_table(art: Art, x, y, w, h, rows, next_header):
         if index % 2 == 1:
             art.draw.rectangle((x, ry, x + w, ry + row_h), fill=(251, 249, 245))
         mid = ry + row_h / 2
-        item_face = fit_font("bold", item, w * 0.40, item_face_size, 13)
-        art.text((x + pad, mid), item, item_face, INK, "lm")
+        item_box = (x + pad, ry + 4, x + w * 0.42, ry + row_h - 4)
+        item_face = fit_font("bold", item, item_box[2] - item_box[0], item_face_size, 13)
+        art.text((x + pad, mid), item, item_face, INK, "lm", box=item_box)
         fg, bg = colors[status]
-        pill(art, x + w * 0.64, mid, status, fg, bg, pill_face, pill_w)
-        next_face = fit_font("regular", nxt, w * 0.30, next_size, 12)
-        art.text((x + w * 0.68, mid), nxt, next_face, INK, "lm")
+        pill(art, x + w * 0.64, mid, status, fg, bg, pill_face, pill_w, bounds=(x + 8, y + header_h, x + w - 8, y + h - 8))
+        next_box = (x + w * 0.68, ry + 4, x + w - pad, ry + row_h - 4)
+        next_face = fit_font("regular", nxt, next_box[2] - next_box[0], next_size, 12)
+        art.text((x + w * 0.68, mid), nxt, next_face, INK, "lm", box=next_box)
         if index:
             art.draw.line((x + pad, ry, x + w - pad, ry), fill=LINE, width=1)
 
@@ -406,8 +449,8 @@ def _photo_table(art: Art, x, y, w, h, rows):
     header_h = int(h * 0.12)
     art.draw.rectangle((x, y, x + w, y + header_h), fill=MIST)
     head = font("bold", max(13, int(header_h * 0.36)))
-    art.text((x + pad, y + header_h / 2), "SLOT AND FILE", head, PINE, "lm")
-    art.text((x + w - pad, y + header_h / 2), "FLAG", head, PINE, "rm")
+    art.text((x + pad, y + header_h / 2), "SLOT AND FILE", head, PINE, "lm", box=(x + pad, y + 4, x + w * 0.62, y + header_h - 2))
+    art.text((x + w - pad, y + header_h / 2), "FLAG", head, PINE, "rm", box=(x + w * 0.7, y + 4, x + w - pad, y + header_h - 2))
     body = h - header_h
     row_h = body / len(rows)
     swatch = int(min(row_h * 0.62, w * 0.08))
@@ -429,17 +472,19 @@ def _photo_table(art: Art, x, y, w, h, rows):
             )
             art.texts.append("no file")
             dash = font("bold", max(12, swatch // 5))
-            art.text((sx + swatch / 2, mid), "—", dash, MUTED, "mm")
+            art.text((sx + swatch / 2, mid), "—", dash, MUTED, "mm", box=(sx + 2, sy + 2, sx + swatch - 2, sy + swatch - 2))
         else:
             rounded(art, (sx, sy, sx + swatch, sy + swatch), 8, block)
         text_x = sx + swatch + int(w * 0.02)
-        slot_face = fit_font("bold", slot, w * 0.42, max(16, int(row_h * 0.28)), 13)
-        file_face = fit_font("mono", filename, w * 0.46, max(13, int(row_h * 0.20)), 11)
-        art.text((text_x, mid - row_h * 0.16), slot, slot_face, INK, "lm")
-        art.text((text_x, mid + row_h * 0.18), filename, file_face, MUTED, "lm")
         box = int(min(22, row_h * 0.28))
         pill_right = x + w - pad
-        pill(art, pill_right, mid, status, *colors[status], pill_face, pill_w)
+        text_right = pill_right - pill_w - box - 20
+        text_box = (text_x, ry + 4, text_right, ry + row_h - 4)
+        slot_face = fit_font("bold", slot, text_box[2] - text_box[0], max(16, int(row_h * 0.28)), 13)
+        file_face = fit_font("mono", filename, text_box[2] - text_box[0], max(13, int(row_h * 0.20)), 11)
+        art.text((text_x, mid - row_h * 0.16), slot, slot_face, INK, "lm", box=text_box)
+        art.text((text_x, mid + row_h * 0.18), filename, file_face, MUTED, "lm", box=text_box)
+        pill(art, pill_right, mid, status, *colors[status], pill_face, pill_w, bounds=(x + 8, y + header_h, x + w - 8, y + h - 8))
         checkbox(art, pill_right - pill_w - box - 12, mid - box / 2, box, flagged)
         if index:
             art.draw.line((x + pad, ry, x + w - pad, ry), fill=LINE, width=1)
@@ -449,12 +494,14 @@ def cover_process(w, h):
     art = Art(w, h, PAPER)
     hairline(art)
     kicker(art, int(h * 0.055))
-    title = fit_font("bold", "Receive, Organize, Return", int(w * 0.9), max(36, int(h * 0.075)))
-    art.text((w / 2, int(h * 0.20)), "Receive, Organize, Return", title, INK, "mt")
-    sub = font("bold", max(18, int(h * 0.032)))
-    art.text((w / 2, int(h * 0.20) + title.size + int(h * 0.02)), "One fictional job", sub, MUTED, "mt")
-
     margin = int(w * 0.05)
+    title = fit_font("bold", "Receive, Organize, Return", int(w * 0.9), max(36, int(h * 0.075)))
+    title_top = int(h * 0.18)
+    art.text((w / 2, title_top), "Receive, Organize, Return", title, INK, "mt", box=(margin, title_top - 4, w - margin, title_top + title.size + 8))
+    sub = font("bold", max(18, int(h * 0.032)))
+    sub_top = title_top + title.size + int(h * 0.02)
+    art.text((w / 2, sub_top), "One fictional job", sub, MUTED, "mt", box=(margin, sub_top - 2, w - margin, sub_top + sub.size + 6))
+
     gap = int(w * 0.03)
     top = int(h * 0.36)
     height = int(h * 0.50)
@@ -471,10 +518,11 @@ def cover_process(w, h):
         cx = x + col_w / 2
         cy = top + int(height * 0.16)
         art.draw.ellipse((cx - radius, cy - radius, cx + radius, cy + radius), fill=PINE)
-        num = fit_font("bold", number, radius * 1.4, max(18, int(radius * 0.9)))
-        art.text((cx, cy), number, num, WHITE, "mm")
+        num = fit_font("bold", number, radius * 1.2, max(18, int(radius * 0.85)))
+        art.text((cx, cy), number, num, WHITE, "mm", box=(cx - radius + 2, cy - radius + 2, cx + radius - 2, cy + radius - 2))
         face = fit_font("bold", label, col_w - 24, max(20, int(h * 0.04)))
-        art.text((cx, cy + radius + int(height * 0.08)), label, face, INK, "mt")
+        label_y = cy + radius + int(height * 0.08)
+        art.text((cx, label_y), label, face, INK, "mt", box=(x + 12, label_y - 2, x + col_w - 12, label_y + face.size + 6))
         box = (
             x + int(col_w * 0.12),
             top + int(height * 0.42),
@@ -488,11 +536,7 @@ def cover_process(w, h):
             art.draw.line((ax, ay, ax + gap - 10, ay), fill=BRASS, width=3)
             tip = ax + gap - 8
             art.draw.polygon([(tip - 10, ay - 6), (tip, ay), (tip - 10, ay + 6)], fill=BRASS)
-    footer_line(
-        art,
-        "North Pine Demo Builders  ·  fictional job NP-1042  ·  not a real client",
-        int(h * 0.945),
-    )
+    footer_line(art, COVER_FOOTER)
     return art
 
 
@@ -513,10 +557,11 @@ def _draw_pile(art: Art, box):
             1,
         )
     face = font("mono", max(10, int(w * 0.055)))
-    lx = x + w * 0.10
-    ly = y + h * 0.46
+    slip = (x + w * 0.06, y + h * 0.36, x + w * 0.78, y + h * 0.96)
+    lx = slip[0] + 6
+    ly = slip[1] + 6
     for line in ("v7.pdf", "IMG.jpg", "scan.pdf"):
-        art.text((lx, ly), line, face, MUTED, "lt")
+        art.text((lx, ly), line, face, MUTED, "lt", box=slip)
         ly += face.size + 2
 
 
@@ -533,8 +578,15 @@ def _draw_folders(art: Art, box):
         tab_h = fh * 0.22
         art.draw.rounded_rectangle((fx, fy, fx + tab_w, fy + tab_h + 8), radius=5, fill=PINE)
         art.draw.rounded_rectangle((fx, fy + tab_h, fx + fw, fy + fh), radius=6, fill=SAGE if index == 1 else PINE)
-        face = fit_font("bold", label, fw * 0.8, max(12, int(fw * 0.28)))
-        art.text((fx + fw / 2, fy + tab_h + (fh - tab_h) / 2), label, face, WHITE, "mm")
+        face = fit_font("bold", label, fw * 0.7, max(12, int(fw * 0.26)))
+        art.text(
+            (fx + fw / 2, fy + tab_h + (fh - tab_h) / 2),
+            label,
+            face,
+            WHITE,
+            "mm",
+            box=(fx + 2, fy + tab_h, fx + fw - 2, fy + fh - 2),
+        )
 
 
 def _draw_packet(art: Art, box):
@@ -542,15 +594,22 @@ def _draw_packet(art: Art, box):
     rounded(art, (x, y + h * 0.08, x + w * 0.78, y + h * 0.92), 6, WHITE, LINE, 2)
     art.draw.rectangle((x, y + h * 0.08, x + w * 0.78, y + h * 0.22), fill=PINE)
     face = font("bold", max(10, int(w * 0.07)))
-    art.text((x + w * 0.06, y + h * 0.15), "Packet", face, WHITE, "lm")
+    art.text(
+        (x + w * 0.06, y + h * 0.15),
+        "Packet",
+        face,
+        WHITE,
+        "lm",
+        box=(x + 2, y + h * 0.08, x + w * 0.5, y + h * 0.24),
+    )
     line_y = y + h * 0.32
     for _ in range(4):
         art.draw.rectangle((x + w * 0.08, line_y, x + w * 0.68, line_y + max(3, int(h * 0.035))), fill=LINE)
         line_y += h * 0.12
     lx = x + w * 0.52
     rounded(art, (lx, y, lx + w * 0.46, y + h * 0.42), 6, MIST, PINE, 2)
-    small = fit_font("bold", "List", w * 0.36, max(11, int(w * 0.09)))
-    art.text((lx + w * 0.23, y + h * 0.21), "List", small, PINE, "mm")
+    small = fit_font("bold", "List", w * 0.32, max(11, int(w * 0.09)))
+    art.text((lx + w * 0.23, y + h * 0.21), "List", small, PINE, "mm", box=(lx + 4, y + 4, lx + w * 0.46 - 4, y + h * 0.42 - 4))
 
 
 def rl(rgb, alpha=1):
@@ -563,12 +622,53 @@ def register_pdf_fonts():
     pdfmetrics.registerFont(TTFont("Mono", str(FONT_DIR / "LiberationMono-Regular.ttf")))
 
 
+class RecordingCanvas(canvas.Canvas):
+    """Canvas that records each string against the box it must stay inside."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.placements: list[tuple[str, tuple, tuple]] = []
+        page = self._pagesize
+        self.limit = (0, 0, page[0], page[1])
+        self.tracking = True
+
+    def _record(self, text, x, y, align):
+        if not self.tracking or not text:
+            return
+        face = pdfmetrics.getFont(self._fontname).face
+        size = self._fontsize
+        width = pdfmetrics.stringWidth(text, self._fontname, size)
+        ascent = face.ascent * size / 1000.0
+        descent = abs(face.descent) * size / 1000.0
+        if align == "left":
+            left = x
+        elif align == "right":
+            left = x - width
+        else:
+            left = x - width / 2.0
+        bbox = (left, y - descent, left + width, y + ascent)
+        self.placements.append((text, bbox, tuple(self.limit)))
+
+    def drawString(self, x, y, text, mode=None, charSpace=0, direction=None, wordSpace=None, shaping=False):
+        self._record(text, x, y, "left")
+        super().drawString(x, y, text, mode, charSpace, direction, wordSpace, shaping)
+
+    def drawRightString(self, x, y, text, mode=None, charSpace=0, direction=None, wordSpace=None, shaping=False):
+        self._record(text, x, y, "right")
+        super().drawRightString(x, y, text, mode, charSpace, direction, wordSpace, shaping)
+
+    def drawCentredString(self, x, y, text, mode=None, charSpace=0, direction=None, wordSpace=None, shaping=False):
+        self._record(text, x, y, "centre")
+        super().drawCentredString(x, y, text, mode, charSpace, direction, wordSpace, shaping)
+
+
 class Doc:
     def __init__(self, path: Path, title: str):
         self.path = path
         self.texts: list[str] = [title, "North Pine Demo Builders", FOOTER, "Fictional data", "SAMPLE"]
         self.page_w, self.page_h = letter
-        self.c = canvas.Canvas(str(path), pagesize=letter, invariant=1)
+        self.c = RecordingCanvas(str(path), pagesize=letter, invariant=1)
+        self.body_box = (44, 50, self.page_w - 44, self.page_h - 42)
         self.c.setTitle(title)
         self.c.setAuthor("North Pine Demo Builders")
         self.c.setSubject("Fictional sample. Not a real client.")
@@ -581,6 +681,7 @@ class Doc:
 
     def chrome(self, page: int, pages: int = 3):
         c = self.c
+        c.tracking = False
         c.setFillColor(rl(PINE, 0.07))
         c.saveState()
         c.translate(self.page_w / 2, self.page_h / 2)
@@ -588,25 +689,43 @@ class Doc:
         c.setFont("Sans-Bold", 78)
         c.drawCentredString(0, 0, "SAMPLE")
         c.restoreState()
+        c.tracking = True
         c.setFillColor(rl(PINE))
         c.rect(0, self.page_h - 34, self.page_w, 34, fill=1, stroke=0)
         c.setFillColor(white)
         c.setFont("Sans-Bold", 11)
+        c.limit = (40, self.page_h - 32, self.page_w - 40, self.page_h - 4)
         c.drawString(48, self.page_h - 22, "SAMPLE")
         c.drawRightString(self.page_w - 48, self.page_h - 22, "Fictional data")
         c.setFillColor(rl(LINE))
         c.rect(48, 42, self.page_w - 96, 0.8, fill=1, stroke=0)
         c.setFillColor(rl(MUTED))
         c.setFont("Sans", 8.5)
+        c.limit = (40, 16, self.page_w - 40, 38)
         c.drawString(48, 26, FOOTER)
         c.drawRightString(self.page_w - 48, 26, f"{page} / {pages}")
+        c.limit = self.body_box
         self.say(FOOTER)
         self.say("SAMPLE")
         self.say("Fictional data")
         self.say(f"{page} / {pages}")
 
     def wrap(self, text, face, size, width):
-        words = text.split()
+        words: list[str] = []
+        for word in text.split():
+            if pdfmetrics.stringWidth(word, face, size) <= width:
+                words.append(word)
+                continue
+            piece = ""
+            for char in word:
+                trial = piece + char
+                if piece and pdfmetrics.stringWidth(trial, face, size) > width:
+                    words.append(piece)
+                    piece = char
+                else:
+                    piece = trial
+            if piece:
+                words.append(piece)
         lines: list[str] = []
         current = ""
         for word in words:
@@ -625,11 +744,13 @@ class Doc:
         c = self.c
         c.setFillColor(rl(color))
         c.setFont(face, size)
+        c.limit = (x, 50, x + width, self.page_h - 42)
         baseline = y - size
         for line in self.wrap(text, face, size, width):
             c.drawString(x, baseline, line)
             self.say(line)
             baseline -= leading
+        c.limit = self.body_box
         return baseline + leading - 4
 
     def save(self):
@@ -639,7 +760,9 @@ class Doc:
 def section_title(doc: Doc, text, y):
     doc.c.setFillColor(rl(PINE))
     doc.c.setFont("Sans-Bold", 20)
+    doc.c.limit = (48, y - 36, doc.page_w - 48, y)
     doc.c.drawString(48, y - 20, text)
+    doc.c.limit = doc.body_box
     doc.say(text)
     doc.c.setFillColor(rl(BRASS))
     doc.c.rect(48, y - 30, 72, 2.5, fill=1, stroke=0)
@@ -658,12 +781,15 @@ def meta_table(doc: Doc, y, rows):
     for label, value in rows:
         doc.c.setFillColor(rl(MUTED))
         doc.c.setFont("Sans-Bold", 9)
+        doc.c.limit = (62, cursor - 3, 168, cursor + 11)
         doc.c.drawString(62, cursor, label)
         doc.say(label)
         doc.c.setFillColor(rl(INK))
         doc.c.setFont("Sans", 10)
+        doc.c.limit = (176, cursor - 3, doc.page_w - 56, cursor + 11)
         doc.c.drawString(176, cursor, value)
         doc.say(value)
+        doc.c.limit = doc.body_box
         cursor -= row_h
     return bottom - 16
 
@@ -679,9 +805,11 @@ def data_table(doc: Doc, y, columns, rows, font_size=9, min_row=22):
     doc.c.setFont("Sans-Bold", 8)
     x = x0
     for title, width in columns:
+        doc.c.limit = (x + 4, y - header_h + 2, x + width - 4, y - 2)
         doc.c.drawString(x + 6, y - 15, title)
         doc.say(title)
         x += width
+    doc.c.limit = doc.body_box
     cursor = y - header_h
     for index, row in enumerate(rows):
         heights = []
@@ -702,12 +830,14 @@ def data_table(doc: Doc, y, columns, rows, font_size=9, min_row=22):
         for lines, (_, width) in zip(wrapped, columns):
             doc.c.setFillColor(rl(INK))
             doc.c.setFont("Sans", font_size)
+            doc.c.limit = (x + 4, cursor - row_h + 2, x + width - 4, cursor - 2)
             text_y = cursor - font_size - 5
             for line in lines:
                 doc.c.drawString(x + 6, text_y, line)
                 doc.say(line)
                 text_y -= font_size + 3
             x += width
+        doc.c.limit = doc.body_box
         cursor -= row_h
     doc.c.setStrokeColor(rl(LINE))
     doc.c.line(x0, cursor, x0 + total_w, cursor)
@@ -725,11 +855,13 @@ def note_box(doc: Doc, y, text, width=None):
     doc.c.rect(48, bottom, 4, height, fill=1, stroke=0)
     doc.c.setFillColor(rl(INK))
     doc.c.setFont("Sans", 9.5)
+    doc.c.limit = (64, bottom + 4, 64 + (width - 24), y - 4)
     baseline = y - 16
     for line in lines:
         doc.c.drawString(64, baseline, line)
         doc.say(line)
         baseline -= 13
+    doc.c.limit = doc.body_box
     return bottom - 14
 
 
@@ -863,7 +995,7 @@ def build_quote_pdf(path: Path):
         "Draft wording stays in this packet until the contractor reviews it. The sample does not contact anyone.",
     )
     doc.save()
-    return doc.texts
+    return doc.texts, doc.c.placements
 
 
 def build_photo_pdf(path: Path):
@@ -991,7 +1123,7 @@ def build_photo_pdf(path: Path):
         "The flag does not score the work and does not approve a payment.",
     )
     doc.save()
-    return doc.texts
+    return doc.texts, doc.c.placements
 
 
 def draw_slot_grid(doc: Doc, top, slots):
@@ -1018,6 +1150,7 @@ def draw_slot_grid(doc: Doc, top, slots):
             doc.c.setDash()
             doc.c.setFillColor(rl(MUTED))
             doc.c.setFont("Sans-Bold", 9)
+            doc.c.limit = (x + 16, block_y + 4, x + width - 16, block_y + block_h - 4)
             doc.c.drawCentredString(x + width / 2, block_y + 19, "No file")
             doc.say("No file")
         else:
@@ -1025,12 +1158,15 @@ def draw_slot_grid(doc: Doc, top, slots):
             doc.c.roundRect(x + 12, block_y, width - 24, block_h, 4, fill=1, stroke=0)
         doc.c.setFillColor(rl(INK))
         doc.c.setFont("Sans-Bold", 10)
+        doc.c.limit = (x + 12, bottom + 28, x + width - 12, bottom + 48)
         doc.c.drawString(x + 12, bottom + 36, f"{slot}  ·  {finding}")
         doc.say(f"{slot}  ·  {finding}")
         doc.c.setFillColor(rl(MUTED))
         doc.c.setFont("Mono", 8)
+        doc.c.limit = (x + 12, bottom + 8, x + width - 12, bottom + 32)
         doc.c.drawString(x + 12, bottom + 20, filename)
         doc.say(filename)
+        doc.c.limit = doc.body_box
     rows = (len(slots) + cols - 1) // cols
     return top - rows * (height + gap_y) + gap_y - 8
 
@@ -1046,18 +1182,29 @@ def generate(out: Path):
         "cf-r3_upwork-catalog-photo_1000x750_v1.png": (cover_photo, (1000, 750)),
         "cf-r3_upwork-catalog-process_1000x750_v1.png": (cover_process, (1000, 750)),
     }
-    drawn: dict[Path, list[str]] = {}
+    drawn: dict[Path, tuple[list[str], list]] = {}
     for name, (builder, size) in images.items():
         art = builder(*size)
         path = out / name
         art.save(path)
-        drawn[path] = list(art.texts)
+        drawn[path] = (list(art.texts), art.placements)
     register_pdf_fonts()
     quote = out / "cf-r3_sample-quote-packet_FICTIONAL_v1.pdf"
     photo = out / "cf-r3_sample-photo-exception_FICTIONAL_v1.pdf"
     drawn[quote] = build_quote_pdf(quote)
     drawn[photo] = build_photo_pdf(photo)
     return drawn
+
+
+def _placement_errors(placements) -> list[str]:
+    found = []
+    for value, bbox, limit in placements:
+        if outside(bbox, limit):
+            snippet = value if len(value) <= 48 else value[:45] + "..."
+            found.append(
+                f"{snippet!r} bbox {tuple(round(v, 1) for v in bbox)} outside {tuple(round(v, 1) for v in limit)}"
+            )
+    return found
 
 
 def _blob(path: Path, recorded: list[str]) -> str:
@@ -1073,7 +1220,19 @@ def _blob(path: Path, recorded: list[str]) -> str:
     return "\n".join(parts)
 
 
-def check(drawn: dict[Path, list[str]]):
+def _detector_catches_overflow() -> None:
+    """The box check has to fail closed. A string drawn past its box must be reported."""
+    art = Art(70, 36, PAPER)
+    art.text((58, 6), "OVERFLOW", font("bold", 20), INK, "lt", box=(0, 0, 70, 36))
+    if not art.overflows():
+        raise SystemExit("text-box check did not flag a string drawn past its box")
+    inside = Art(220, 48, PAPER)
+    inside.text((12, 12), "Fits", font("bold", 18), INK, "lt", box=(0, 0, 220, 48))
+    if inside.overflows():
+        raise SystemExit("text-box check flagged a string that fits: " + "; ".join(inside.overflows()))
+
+
+def check(drawn: dict[Path, tuple[list[str], list]]):
     errors: list[str] = []
     expected_png = {
         "cf-r3_fiverr-cover-packet_1280x769_v1.png": (1280, 769),
@@ -1095,7 +1254,9 @@ def check(drawn: dict[Path, list[str]]):
         if len(words) > 10:
             errors.append(f"headline over 10 words: {headline}")
 
-    for path, recorded in drawn.items():
+    for path, (recorded, placements) in drawn.items():
+        for problem in _placement_errors(placements):
+            errors.append(f"{path.name} text runs past its box: {problem}")
         blob = _blob(path, recorded).casefold()
         if "sample" not in blob or "fictional data" not in blob:
             errors.append(f"{path.name} is missing SAMPLE or Fictional data")
@@ -1159,6 +1320,7 @@ def main(argv: list[str] | None = None) -> int:
     ) if not (FONT_DIR / name).is_file()]
     if missing:
         raise SystemExit(f"Missing font files in {FONT_DIR}: {', '.join(missing)}")
+    _detector_catches_overflow()
     drawn = generate(args.out)
     check(drawn)
     print(f"{'file':<56} {'px or pages':<16} bytes")

@@ -12,7 +12,7 @@ From the repository root, with the project virtualenv:
 .venv/bin/python tools/samples/generate_samples.py
 ```
 
-Pillow, reportlab, and pypdf are already pinned in `requirements.txt`. The script writes `assets/samples/` and then checks size, page count, the sample money figures, and a block list (brand names, contact details, street-address words, certification and revenue claims). A failed check exits non-zero.
+Pillow, reportlab, and pypdf are already pinned in `requirements.txt`. The script writes `assets/samples/` and then checks size, page count, the sample money figures, and a block list (brand names, contact details, street-address words, certification and revenue claims). It also records every drawn string against the box it belongs in — the cover, a card, a table cell, or a page region — and exits non-zero if any glyph runs past that box. A tiny self-check confirms the detector flags an overflowing string and accepts one that fits.
 
 The script is not part of the CI test set. Do not add it under `tests/` unless the trusted manifest is updated in the same change.
 
