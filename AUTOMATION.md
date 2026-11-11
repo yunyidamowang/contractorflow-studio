@@ -70,3 +70,11 @@ README.md; no external commands or private information.
 - 强制杀进程/断电不是本轮稳定性验收。持久running记录阻止同触发自动重跑，先人工检查孤儿进程/已创建PR；不删除账本绕过限额。休眠、重新登录、长期运行、真实模型及GitHub账号权限都仍待真实Demo验收。首轮不安装launchd，也不更改Mac休眠设置。
 
 恢复：修复问题→检查是否已有PR→重新授权加标；最多剩余一次。紧急撤权同时STOP、撤销项目PAT、退出项目专用Codex登录。只给GrokIssues权限，不授予它本机命令入口。
+
+## P0-B / CF-20261108-018 (2026-11-11)
+
+Added task-wide POSIX ITIMER_REAL/SIGALRM watchdog, default total_timeout_seconds=1200 (30..1200 allowed), starting at durable attempt reservation. Checks every 100ms and interrupts blocking supervisor I/O across snapshot, preparation, model, tests and publication. Per-phase limits remain. Child/git process groups receive TERM then KILL after at most 3s even if the leader exited; timer delivery is deferred during bounded group cleanup. Kernel uninterruptible operations, interpreter-native code that never handles signals, and descendants deliberately escaping the process group are not claimed as VM-level isolation.
+
+STOP lstat failures stop safely. Any open repository Issue labeled codex-stop is a global stop; current task authorization is also checked. Remote monitoring polls every 2s, errors stop, and stale results >25s stop even if network stalls; each POST performs a fresh remote check. No new permissions or dependencies. Failure notification is best-effort after stopping, with no task publication retry. Existing attempt quota is retained. Task stop reasons are sanitized audit events.
+
+Exact manifest: 67/67 passed locally (1.992s), 10 new guard tests; original tests/hashes preserved. CI pending. Local enabled=false/canary_issue=4/settings and attempt ledger unchanged. No once/watch/model/real-data/deployment/merge.

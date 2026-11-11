@@ -24,6 +24,7 @@ import tarfile
 import time
 import urllib.error
 import urllib.request
+from automation.task_guard import TaskGuard, TaskStopped, local_stop, terminate_group
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME = ROOT / '.automation'
@@ -85,10 +86,17 @@ class GitHub:
     def __init__(self, token):
         self.token = token.strip()
         self.deadline = None
+        self.guard = None
         if not self.token:
             raise Blocked('Project-scoped GitHub token missing')
 
     def api(self, method, route, data=None):
+        if method != 'GET' and self.guard is not None:
+            self.guard.check()
+            try:revoked = self.guard.remote_stop()
+            except Exception:revoked = True
+            if revoked:raise TaskStopped('remote_stop_or_unavailable')
+            self.guard.check()
         if self.deadline is not None and time.monotonic() >= self.deadline:
             raise Blocked('Total task deadline reached')
         # No arbitrary URLs, delete, merge, main ref updates, workflow or admin API.
@@ -239,9 +247,10 @@ class GitHub:
 def settings():
     config = json.loads((RUNTIME / 'settings.json').read_text())
     config.setdefault('canary_issue', 4)
+    config.setdefault('total_timeout_seconds', 1200)
     if config['canary_issue'] is not None and (type(config['canary_issue']) is not int or config['canary_issue'] < 1):
         raise Blocked('Canary must be a positive Issue number or null after manual acceptance')
-    for key, minimum, maximum in [('max_attempts_per_issue', 1, 2), ('max_runs_per_day', 1, 3),
+    for key, minimum, maximum in [('total_timeout_seconds', 30, 1200), ('max_attempts_per_issue', 1, 2), ('max_runs_per_day', 1, 3),
             ('timeout_seconds', 30, 600), ('test_timeout_seconds', 30, 180), ('poll_seconds', 60, 3600), ('retry_delay_seconds', 60, 86400)]:
         if type(config.get(key)) is not int or not minimum <= config[key] <= maximum:
             raise Blocked('Invalid bounded setting: '+key)
@@ -251,7 +260,7 @@ def settings():
 
 
 def stopped():
-    return (RUNTIME / 'STOP').exists()
+    return local_stop(RUNTIME / 'STOP')
 
 
 def audit(event, **values):
@@ -285,21 +294,19 @@ def child(args, checkout, timeout, log, env, remote_stop=None):
             if process.returncode:
                 raise Blocked(f'Subprocess failed ({process.returncode}); local log: {log.name}')
         finally:
-            try:
-                os.killpg(process.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            if process.poll() is None:
-                try:
-                    process.wait(timeout=3)
-                except subprocess.TimeoutExpired:
-                    os.killpg(process.pid, signal.SIGKILL)
-                    process.wait()
+            terminate_group(process)
 
 
 def git(checkout, *args):
-    return subprocess.check_output(['/usr/bin/git', '-c', 'core.hooksPath=/dev/null', *args], cwd=checkout,
-        env=clean_env(checkout / '.worker-tmp', checkout / '.worker-tmp'), stderr=subprocess.DEVNULL, timeout=30).decode().strip()
+    process = subprocess.Popen(['/usr/bin/git', '-c', 'core.hooksPath=/dev/null', *args], cwd=checkout,
+        env=clean_env(checkout / '.worker-tmp', checkout / '.worker-tmp'), stderr=subprocess.DEVNULL,
+        stdout=subprocess.PIPE, start_new_session=True)
+    try:
+        output,_=process.communicate(timeout=30)
+        if process.returncode:raise Blocked('Git subprocess failed')
+        return output.decode().strip()
+    finally:terminate_group(process)
+
 
 
 def prepare(checkout):
@@ -443,53 +450,63 @@ def run_issue(api, issue, config, db):
     task = parse_task(issue, comments)
     # Re-read before reserving to avoid running a stale poll result after revocation.
     actor_gate(api.api('GET', f'/issues/{number}'), api.pages(f'/issues/{number}/events'), config['allowed_actors'])
+    if stopped() or api.pages('/issues?state=open&labels=codex-stop'):
+        raise Blocked('Global STOP active')
     rowid, attempt = reserve(db, number, trigger, config)
-    api.deadline = time.monotonic()+1200  # Includes snapshot, model, tests and PR publication.
+    api.deadline = time.monotonic()+config.get('total_timeout_seconds', 1200)  # Includes snapshot, model, tests and PR publication.
     run = RUNTIME / 'runs' / f'issue-{number}-attempt-{attempt}'
     checkout = run / 'checkout'
-    checkout.mkdir(parents=True)
-    audit('started', issue=number, attempt=attempt, trigger=trigger,
-          task_sha256=hashlib.sha256(json.dumps(task, sort_keys=True).encode()).hexdigest())
     def revoked():
         latest = api.api('GET', f'/issues/{number}')
         try:
             return actor_gate(latest, api.pages(f'/issues/{number}/events'), config['allowed_actors']) != trigger
-        except Blocked:
+        except Exception:
             return True
+    def remote_stopped():
+        return bool(api.pages('/issues?state=open&labels=codex-stop')) or revoked()
+    guard = TaskGuard(config.get('total_timeout_seconds',1200), RUNTIME/'STOP', remote_stopped)
+    guard.deadline = api.deadline
+    api.guard = guard
     try:
-        api.feedback(number, f'Task accepted: attempt {attempt}/2. Local isolated SAMPLE checkout; deadline 10 minutes for Codex. No deployment or merge.')
-        base, tree = api.snapshot(checkout)
-        audit('snapshot', issue=number, base=base, tree=tree)
-        prepare(checkout)
-        preflight(checkout, run)
-        if not (RUNTIME / 'codex-home/auth.json').is_file():
-            raise Blocked('Independent ChatGPT login required; run Automation Login.command locally')
-        prompt = (ROOT / 'automation/task.md').read_text()+json.dumps(task, ensure_ascii=True)
-        prompt_path = run / 'task.json'
-        prompt_path.write_text(json.dumps(task, ensure_ascii=True))
-        # Prompt is argv data, never interpolated into a shell command. No shell=True.
-        env = clean_env(checkout / '.worker-tmp', checkout / '.worker-tmp')
-        child(['codex', '-a', 'never', 'exec', '--ephemeral', '--ignore-rules', '--json',
-               '-C', str(checkout), '-c', 'forced_login_method="chatgpt"', prompt], checkout,
-               min(config['timeout_seconds'], max(1, int(api.deadline-time.monotonic()))), run / 'codex.jsonl', env, revoked)
-        changes = diff(checkout, task['allowed_paths'])
-        policy = json.loads((ROOT / 'automation/test_manifest.json').read_text())
-        runner = (ROOT / 'automation/trusted_tests.py').read_text()
-        child(sandbox(checkout, [sys.executable, '-c', runner, str(checkout), json.dumps(policy)]), checkout,
-              min(config['test_timeout_seconds'], max(1, int(api.deadline-time.monotonic()))), run / 'tests.log', env, revoked)
-        test_log = (run / 'tests.log').read_text(errors='replace')
-        verify_test_result(test_log, policy)
-        if diff(checkout, task['allowed_paths']) != changes:
-            raise Blocked('Working files changed during tests; review before publication')
-        if revoked() or stopped():
-            raise Blocked('Authorization revoked before publication')
-        url = api.publish(number, attempt, base, tree, changes)
-        db.execute('UPDATE runs SET status=?,result=? WHERE id=?', ('pr', url, rowid));db.commit()
-        audit('pr_created', issue=number, attempt=attempt, pr=url)
-        api.feedback(number, f'Draft PR: {url}\nFixed unittest suite: PASS. Files: '+', '.join(x[0] for x in changes)+f'\nAttempt {attempt}/2. Manual acceptance required. Raw logs stay local; Goal/Acceptance must be reviewed in PR.')
+        with guard:
+            checkout.mkdir(parents=True)
+            audit('started', issue=number, attempt=attempt, trigger=trigger,
+                  task_sha256=hashlib.sha256(json.dumps(task, sort_keys=True).encode()).hexdigest())
+            api.feedback(number, f'Task accepted: attempt {attempt}/2. Local isolated SAMPLE checkout; deadline 10 minutes for Codex. No deployment or merge.')
+            base, tree = api.snapshot(checkout)
+            audit('snapshot', issue=number, base=base, tree=tree)
+            prepare(checkout)
+            preflight(checkout, run)
+            if not (RUNTIME / 'codex-home/auth.json').is_file():
+                raise Blocked('Independent ChatGPT login required; run Automation Login.command locally')
+            prompt = (ROOT / 'automation/task.md').read_text()+json.dumps(task, ensure_ascii=True)
+            prompt_path = run / 'task.json'
+            prompt_path.write_text(json.dumps(task, ensure_ascii=True))
+            # Prompt is argv data, never interpolated into a shell command. No shell=True.
+            env = clean_env(checkout / '.worker-tmp', checkout / '.worker-tmp')
+            child(['codex', '-a', 'never', 'exec', '--ephemeral', '--ignore-rules', '--json',
+                   '-C', str(checkout), '-c', 'forced_login_method="chatgpt"', prompt], checkout,
+                   min(config['timeout_seconds'], max(1, int(api.deadline-time.monotonic()))), run / 'codex.jsonl', env, revoked)
+            changes = diff(checkout, task['allowed_paths'])
+            policy = json.loads((ROOT / 'automation/test_manifest.json').read_text())
+            runner = (ROOT / 'automation/trusted_tests.py').read_text()
+            child(sandbox(checkout, [sys.executable, '-c', runner, str(checkout), json.dumps(policy)]), checkout,
+                  min(config['test_timeout_seconds'], max(1, int(api.deadline-time.monotonic()))), run / 'tests.log', env, revoked)
+            test_log = (run / 'tests.log').read_text(errors='replace')
+            verify_test_result(test_log, policy)
+            if diff(checkout, task['allowed_paths']) != changes:
+                raise Blocked('Working files changed during tests; review before publication')
+            if revoked() or stopped():
+                raise Blocked('Authorization revoked before publication')
+            url = api.publish(number, attempt, base, tree, changes)
+            db.execute('UPDATE runs SET status=?,result=? WHERE id=?', ('pr', url, rowid));db.commit()
+            audit('pr_created', issue=number, attempt=attempt, pr=url)
+            api.feedback(number, f'Draft PR: {url}\nFixed unittest suite: PASS. Files: '+', '.join(x[0] for x in changes)+f'\nAttempt {attempt}/2. Manual acceptance required. Raw logs stay local; Goal/Acceptance must be reviewed in PR.')
     except Exception as exc:
         # Unknown errors are summarized by type; never publish arbitrary stderr/model output.
-        reason = str(exc) if isinstance(exc, Blocked) else type(exc).__name__
+        reason = str(exc) if isinstance(exc, (Blocked,TaskStopped)) else type(exc).__name__
+        api.guard = None
+        if isinstance(exc, TaskStopped):audit('task_stopped', issue=number, reason=reason)
         existing = db.execute('SELECT status FROM runs WHERE id=?', (rowid,)).fetchone()[0]
         if existing != 'pr':
             db.execute('UPDATE runs SET status=?,result=? WHERE id=?', ('blocked', reason, rowid));db.commit()
@@ -503,6 +520,7 @@ def run_issue(api, issue, config, db):
         error.reported = True
         raise error from None
     finally:
+        api.guard = None
         api.deadline = None
 
 
