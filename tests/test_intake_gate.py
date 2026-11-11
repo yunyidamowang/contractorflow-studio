@@ -17,7 +17,7 @@ INTAKE_IF = (
     "vars.CF_INTAKE_ENABLED == 'true' && vars.CF_AUTOMATION_STOP != 'true' && "
     "github.event.label.name == 'codex-ready'"
 )
-INTAKE_JOB_SHA256 = 'f172cef8bb535760fe77d1c8d2c9afade205fe357e0e17b18de6db8d2c695aaa'
+INTAKE_JOB_SHA256 = '22316e67291e6ba0a6f9c59424acf6e4e2bf78b00b7758b3df4b007f48a7afc6'
 CI_SHA256 = '4576223a294403ed8e15536941da5d73110c9f157bbf1bc3a008872dce62260d'
 WRITE_API = (
     'createComment', 'github.rest', 'octokit', 'pull_request_target', 'curl', 'wget',
@@ -56,9 +56,16 @@ def expression_body(value):
 
 
 def assert_boolean_expression(testcase, body):
-    compared = body.startswith('contains(') or body.startswith('!contains(') or ' == ' in body or ' != ' in body
+    array_guard = "startsWith(toJSON(fromJSON(vars.CF_ALLOWED_ACTORS || '[]')), '[')"
+    compared = (
+        body.startswith('contains(') or body.startswith('!contains(')
+        or ' == ' in body or ' != ' in body
+        or (body.startswith('startsWith(toJSON(fromJSON(') and '&&' in body))
     testcase.assertTrue(compared, body)
-    testcase.assertNotIn('toJSON', body)
+    testcase.assertNotIn('toJSON(github', body)
+    if 'toJSON' in body:
+        testcase.assertIn(array_guard, body)
+        testcase.assertFalse(body.startswith('toJSON('))
     for found in re.finditer(r'vars\.[A-Za-z0-9_]+', body):
         after = body[found.end():]
         testcase.assertTrue(
@@ -178,13 +185,16 @@ class IntakeGateTests(unittest.TestCase):
         for key, value in env.items():
             self.assertTrue(key.startswith('GATE_'), key)
             assert_boolean_expression(self, expression_body(value))
-        self.assertEqual(env['GATE_ALLOWLIST_CONFIGURED'], "${{ vars.CF_ALLOWED_ACTORS != '' }}")
+        array_guard = "startsWith(toJSON(fromJSON(vars.CF_ALLOWED_ACTORS || '[]')), '[')"
+        self.assertEqual(
+            env['GATE_ALLOWLIST_CONFIGURED'],
+            "${{ " + array_guard + " && vars.CF_ALLOWED_ACTORS != '' }}")
         self.assertEqual(
             env['GATE_ACTOR_ALLOWLISTED'],
-            "${{ contains(fromJSON(vars.CF_ALLOWED_ACTORS || '[]'), github.actor) }}")
+            "${{ " + array_guard + " && contains(fromJSON(vars.CF_ALLOWED_ACTORS || '[]'), github.actor) }}")
         self.assertEqual(
             env['GATE_AUTHOR_ALLOWLISTED'],
-            "${{ contains(fromJSON(vars.CF_ALLOWED_ACTORS || '[]'), github.event.issue.user.login) }}")
+            "${{ " + array_guard + " && contains(fromJSON(vars.CF_ALLOWED_ACTORS || '[]'), github.event.issue.user.login) }}")
         self.assertEqual(
             env['GATE_STOP_LABEL_ABSENT'],
             "${{ !contains(github.event.issue.labels.*.name, 'codex-stop') }}")
@@ -285,6 +295,64 @@ class IntakeGateTests(unittest.TestCase):
             absent=('ZZ-SECRET-ALLOW', 'ZZ-SENTINEL-LABEL', 'TRUE'))
         for code in ('wrong_actor', 'wrong_author', 'intake_disabled', 'stop_label_present', 'wrong_label'):
             self.assertNotIn(code, summary)
+
+    def test_non_array_allowlist_allowlists_nobody(self):
+        data = workflow()
+        env = data['jobs']['gate-report']['steps'][0]['env']
+        guard = "startsWith(toJSON(fromJSON(vars.CF_ALLOWED_ACTORS || '[]')), '[')"
+        for key in ('GATE_ALLOWLIST_CONFIGURED', 'GATE_ACTOR_ALLOWLISTED', 'GATE_AUTHOR_ALLOWLISTED'):
+            body = expression_body(env[key])
+            self.assertIn(guard, body)
+            self.assertIn('&&', body)
+            self.assertFalse(body.startswith('toJSON('))
+            self.assertNotIn('${{ vars.CF_ALLOWED_ACTORS }}', env[key])
+        self.assertIn('contains(fromJSON(vars.CF_ALLOWED_ACTORS || \'[]\'), github.actor)', expression_body(env['GATE_ACTOR_ALLOWLISTED']))
+        self.assertIn('github.event.issue.user.login', expression_body(env['GATE_AUTHOR_ALLOWLISTED']))
+        script = data['jobs']['intake']['steps'][0]['with']['script']
+        self.assertLess(script.index('!Array.isArray(actors)'), script.index('actors.includes(context.actor)'))
+        self.assertEqual(data['jobs']['intake']['if'], INTAKE_IF)
+        self.assertEqual(data['permissions'], {'issues': 'read'})
+        self.assertEqual(data['jobs']['intake']['permissions'], {'issues': 'write'})
+        self.assertEqual(data['jobs']['gate-report']['permissions'], {})
+        self.assertNotIn('pull_request_target', json.dumps(data))
+        probe = r"""
+const fs = require('node:fs');
+const script = JSON.parse(fs.readFileSync(process.argv[1], 'utf8')).jobs.intake.steps[0].with.script;
+const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
+async function once(actors, actor) {
+  const comments = [];
+  const issue = {number:4, state:'open', user:{login:actor}, labels:[{name:'codex-ready'}],
+    body:'## Goal\nSample\n## Acceptance\nSample\n## Allowed paths\n- docs/sample.md\n## References\nREADME.md'};
+  const context = {repo:{owner:'yunyidamowang', repo:'contractorflow-studio'}, payload:{issue}, actor, runId:7};
+  const github = {rest:{issues:{get:async()=>({data:issue}), createComment:async item => comments.push(item)}}};
+  const summary = {addHeading(){return this}, addRaw(){return this}, async write(){}};
+  await new AsyncFunction('github','context','core','process', script)(github, context, {summary}, {env:{ALLOWED_ACTORS:actors}});
+  return comments.length;
+}
+(async () => {
+  const cases = [
+    ['["owner"]', 'owner', true],
+    ['"owner"', 'owner', false],
+    ['"owner-extra"', 'owner', false],
+    ['{"owner":true}', 'owner', false],
+    ['true', 'owner', false],
+    ['null', 'owner', false],
+    ['12', 'owner', false],
+    ['[]', 'owner', false],
+    ['["guest"]', 'owner', false],
+  ];
+  for (const [actors, actor, ok] of cases) {
+    let registered = false;
+    let error = '';
+    try { registered = (await once(actors, actor)) === 1; }
+    catch (err) { error = String(err); }
+    if (ok && !registered) throw new Error('expected allow ' + actors);
+    if (!ok && (registered || !/not allowlisted/.test(error))) throw new Error('expected nobody for ' + actors + ' got ' + error);
+  }
+})().catch(err => { console.error(err); process.exit(1); });
+"""
+        proc = subprocess.run(['node', '-e', probe, str(WORKFLOW)], capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr or proc.stdout)
 
     def test_empty_allowlist_blocks_actor_and_author(self):
         summary = self.assert_report(

@@ -91,7 +91,7 @@ class AutomationTest(unittest.TestCase):
                     child([sys.executable, '-c', 'raise AssertionError()'], root, 2, root/'stopped-log', clean_env(root,root))
                 self.assertFalse((root/'stopped-log').exists())
 
-    def pipeline(self, fail=False, mutate=False, test_log=None, test_exit=False):
+    def pipeline(self, fail=False, mutate=False, test_log=None, test_exit=False, after_record=None):
         # Supervisor/state/feedback flow with explicit fake Git, model, test worker and API.
         # This does not authenticate, invoke a model, or claim real GitHub E2E.
         class FakeAPI:
@@ -101,11 +101,21 @@ class AutomationTest(unittest.TestCase):
                 if '/events' in route:
                     return [{'id': 9, 'event': 'labeled', 'label': {'name': 'codex-ready'}, 'actor': {'login': 'owner'}}]
                 return []
-            def api(self, method, route, data=None):return issue()
+            def api(self, method, route, data=None):
+                if route == '/labels/codex-stop':
+                    return {'name': 'codex-stop'}
+                return issue()
             def snapshot(self, checkout):
                 (checkout/'README.md').write_text('Trusted synthetic base')
                 return 'a'*40, 'b'*40
-            def publish(self, *args):self.publications.append(args);return 'https://example.invalid/SIMULATED-PR'
+            def publish(self, *args, record=None):
+                self.publications.append(args)
+                url = 'https://example.invalid/SIMULATED-PR'
+                if record:
+                    record(url)
+                if after_record:
+                    after_record()
+                return url
             def feedback(self, number, message):self.feedbacks.append(message)
         def fake_child(args, checkout, timeout, log, env, remote_stop=None):
             self.assertNotIn('GITHUB_TOKEN', env)
@@ -126,13 +136,15 @@ class AutomationTest(unittest.TestCase):
             (root/'codex-home/auth.json').write_text('SYNTHETIC PRESENCE FIXTURE — NOT CREDENTIALS')
             db.execute('CREATE TABLE runs(id INTEGER PRIMARY KEY,issue INTEGER,trigger TEXT,status TEXT,started REAL,day TEXT,result TEXT)')
             api=FakeAPI();config={'allowed_actors':['owner'],'max_attempts_per_issue':2,'max_runs_per_day':3,'retry_delay_seconds':60,'timeout_seconds':30,'test_timeout_seconds':30}
+            kept = not (fail or mutate or test_log is not None or test_exit)
             with patch('automation.dispatcher.RUNTIME',root), patch('automation.dispatcher.preflight'), patch('automation.dispatcher.child',side_effect=fake_child), patch('automation.dispatcher.prepare'), patch('automation.dispatcher.diff',side_effect=fake_diff):
-                if fail or mutate or test_log is not None or test_exit:
+                if kept and after_record is None:
+                    run_issue(api,issue(),config,db)
+                else:
                     with self.assertRaises(Blocked):run_issue(api,issue(),config,db)
-                else:run_issue(api,issue(),config,db)
-                self.assertEqual(db.execute('SELECT status FROM runs').fetchone()[0], 'blocked' if fail or mutate or test_log is not None or test_exit else 'pr')
-                self.assertEqual(len(api.publications),0 if fail or mutate or test_log is not None or test_exit else 1)
-                self.assertIn('Needs attention' if fail or mutate or test_log is not None or test_exit else 'Draft PR',api.feedbacks[-1])
+                self.assertEqual(db.execute('SELECT status FROM runs').fetchone()[0], 'pr' if kept else 'blocked')
+                self.assertEqual(len(api.publications), 1 if kept else 0)
+                self.assertIn('Draft PR' if kept and after_record is None else 'Needs attention', api.feedbacks[-1])
                 with self.assertRaises(Blocked):reserve(db,12,'9',config)
 
     def test_simulated_issue_model_tests_pr_feedback(self):self.pipeline()
@@ -145,8 +157,14 @@ class AutomationTest(unittest.TestCase):
         # A bot sharing the owner's identity must not bypass first-demo isolation.
         class FakeAPI:
             def __init__(self, token):pass
-            def api(self, method, route):return {'full_name':'yunyidamowang/contractorflow-studio','private':False}
-            def pages(self, route):return [{'number':5},{'number':4}]
+            def api(self, method, route, data=None):
+                if route == '/labels/codex-stop':
+                    return {'name': 'codex-stop'}
+                return {'full_name':'yunyidamowang/contractorflow-studio','private':False}
+            def pages(self, route):
+                if 'codex-stop' in route:
+                    return []
+                return [{'number':5},{'number':4}]
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp);token=root/'github.token';token.write_text('SYNTHETIC TOKEN');token.chmod(0o600)
             config={'enabled':True,'cli_version':'codex-cli 0.144.6','canary_issue':4,'allowed_actors':['owner']}

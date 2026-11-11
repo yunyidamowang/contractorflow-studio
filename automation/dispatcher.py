@@ -24,7 +24,7 @@ import tarfile
 import time
 import urllib.error
 import urllib.request
-from automation.task_guard import TaskGuard, TaskStopped, local_stop, terminate_group
+from automation.task_guard import TaskGuard, TaskStopped, call_session, local_stop
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME = ROOT / '.automation'
@@ -100,7 +100,7 @@ class GitHub:
         if self.deadline is not None and time.monotonic() >= self.deadline:
             raise Blocked('Total task deadline reached')
         # No arbitrary URLs, delete, merge, main ref updates, workflow or admin API.
-        read = r'(?:|/issues(?:\?[^#]*)?|/issues/\d+(?:/(?:comments|events))?(?:\?[^#]*)?|/git/ref/heads/main|/git/commits/[0-9a-f]{40}|/git/trees/[0-9a-f]{40}(?:\?recursive=1)?|/git/blobs/[0-9a-f]{40}|/pulls\?[^#]*)'
+        read = r'(?:|/issues(?:\?[^#]*)?|/issues/\d+(?:/(?:comments|events))?(?:\?[^#]*)?|/labels/codex-stop|/git/ref/heads/main|/git/commits/[0-9a-f]{40}|/git/trees/[0-9a-f]{40}(?:\?recursive=1)?|/git/blobs/[0-9a-f]{40}|/pulls\?[^#]*)'
         write = r'(?:/issues/\d+/comments|/git/(?:blobs|trees|commits|refs)|/pulls)'
         if not ((method == 'GET' and re.fullmatch(read, route)) or (method == 'POST' and re.fullmatch(write, route))):
             raise Blocked('GitHub operation outside worker capability')
@@ -230,7 +230,7 @@ class GitHub:
             target.chmod(int(mode[-3:], 8))
         return ref, tree_sha
 
-    def publish(self, number, attempt, base, tree_sha, changes):
+    def publish(self, number, attempt, base, tree_sha, changes, record=None):
         entries = []
         for path, content, mode in changes:
             blob = self.api('POST', '/git/blobs', {'content': base64.b64encode(content).decode(), 'encoding': 'base64'})
@@ -239,9 +239,18 @@ class GitHub:
         commit = self.api('POST', '/git/commits', {'message': f'SAMPLE task #{number}, attempt {attempt}', 'tree': tree['sha'], 'parents': [base]})
         branch = f'codex/issue-{number}-attempt-{attempt}-{time.time_ns()}'
         self.api('POST', '/git/refs', {'ref': 'refs/heads/'+branch, 'sha': commit['sha']})
-        return self.api('POST', '/pulls', {'base': 'main', 'head': branch, 'draft': True,
-            'title': f'[Codex] SAMPLE task #{number} / attempt {attempt}',
-            'body': f'Relates to #{number}. Fixed test suite passed. Review diff and acceptance manually.\nBase: {base}\nNo automatic merge or issue closure.'})['html_url']
+        # Hold SIGALRM across the creating request and the caller's durable record.
+        # A timer must not land after GitHub has the PR but before status and audit do.
+        mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGALRM})
+        try:
+            url = self.api('POST', '/pulls', {'base': 'main', 'head': branch, 'draft': True,
+                'title': f'[Codex] SAMPLE task #{number} / attempt {attempt}',
+                'body': f'Relates to #{number}. Fixed test suite passed. Review diff and acceptance manually.\nBase: {base}\nNo automatic merge or issue closure.'})['html_url']
+            if record is not None:
+                record(url)
+            return url
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, mask)
 
 
 def settings():
@@ -263,10 +272,44 @@ def stopped():
     return local_stop(RUNTIME / 'STOP')
 
 
+def global_stop(api):
+    """True when codex-stop is in force. A missing label or any lookup error is STOP."""
+    try:
+        label = api.api('GET', '/labels/codex-stop')
+    except Exception:
+        return True
+    if not isinstance(label, dict) or label.get('name') != 'codex-stop':
+        return True
+    try:
+        return bool(api.pages('/issues?state=open&labels=codex-stop'))
+    except Exception:
+        return True
+
+
 def audit(event, **values):
-    # Metadata only: task text, model logs, credentials and test output stay local.
-    with (RUNTIME / 'audit.jsonl').open('a') as stream:
-        stream.write(json.dumps({'time': dt.datetime.now(dt.timezone.utc).isoformat(), 'event': event, **values})+'\n')
+    # One append of a complete line. SIGALRM cannot tear it; nested callers keep their mask.
+    line = (json.dumps({'time': dt.datetime.now(dt.timezone.utc).isoformat(), 'event': event, **values})+'\n').encode()
+    mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGALRM})
+    try:
+        fd = os.open(RUNTIME / 'audit.jsonl', os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
+        try:
+            view = memoryview(line)
+            while view:
+                wrote = os.write(fd, view)
+                if wrote <= 0:
+                    raise OSError('short audit write')
+                view = view[wrote:]
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, mask)
+
+
+def note_publication(db, rowid, issue, attempt, url):
+    db.execute('UPDATE runs SET status=?,result=? WHERE id=?', ('pr', url, rowid))
+    db.commit()
+    audit('pr_created', issue=issue, attempt=attempt, pr=url)
 
 
 def clean_env(home, tmp):
@@ -279,10 +322,8 @@ def child(args, checkout, timeout, log, env, remote_stop=None):
     if stopped():
         raise Blocked('STOP switch active')
     with log.open('wb') as stream:
-        process = subprocess.Popen(args, cwd=checkout, env=env, stdin=subprocess.DEVNULL,
-            stdout=stream, stderr=subprocess.STDOUT, start_new_session=True)
-        start = last_remote = time.monotonic()
-        try:
+        def body(process):
+            start = last_remote = time.monotonic()
             while process.poll() is None:
                 if stopped() or time.monotonic()-start > timeout or log.stat().st_size > 2_000_000:
                     raise Blocked('Worker stopped, timed out or exceeded log limit')
@@ -293,19 +334,18 @@ def child(args, checkout, timeout, log, env, remote_stop=None):
                 time.sleep(.25)
             if process.returncode:
                 raise Blocked(f'Subprocess failed ({process.returncode}); local log: {log.name}')
-        finally:
-            terminate_group(process)
+        call_session(args, body, cwd=checkout, env=env, stdout=stream.fileno(), stderr='stdout')
 
 
 def git(checkout, *args):
-    process = subprocess.Popen(['/usr/bin/git', '-c', 'core.hooksPath=/dev/null', *args], cwd=checkout,
-        env=clean_env(checkout / '.worker-tmp', checkout / '.worker-tmp'), stderr=subprocess.DEVNULL,
-        stdout=subprocess.PIPE, start_new_session=True)
-    try:
-        output,_=process.communicate(timeout=30)
-        if process.returncode:raise Blocked('Git subprocess failed')
+    def body(process):
+        output, _ = process.communicate(timeout=30)
+        if process.returncode:
+            raise Blocked('Git subprocess failed')
         return output.decode().strip()
-    finally:terminate_group(process)
+    return call_session(['/usr/bin/git', '-c', 'core.hooksPath=/dev/null', *args], body,
+        cwd=checkout, env=clean_env(checkout / '.worker-tmp', checkout / '.worker-tmp'),
+        stdout='pipe', stderr='devnull')
 
 
 
@@ -450,7 +490,7 @@ def run_issue(api, issue, config, db):
     task = parse_task(issue, comments)
     # Re-read before reserving to avoid running a stale poll result after revocation.
     actor_gate(api.api('GET', f'/issues/{number}'), api.pages(f'/issues/{number}/events'), config['allowed_actors'])
-    if stopped() or api.pages('/issues?state=open&labels=codex-stop'):
+    if stopped() or global_stop(api):
         raise Blocked('Global STOP active')
     rowid, attempt = reserve(db, number, trigger, config)
     api.deadline = time.monotonic()+config.get('total_timeout_seconds', 1200)  # Includes snapshot, model, tests and PR publication.
@@ -463,7 +503,7 @@ def run_issue(api, issue, config, db):
         except Exception:
             return True
     def remote_stopped():
-        return bool(api.pages('/issues?state=open&labels=codex-stop')) or revoked()
+        return global_stop(api) or revoked()
     guard = TaskGuard(config.get('total_timeout_seconds',1200), RUNTIME/'STOP', remote_stopped)
     guard.deadline = api.deadline
     api.guard = guard
@@ -498,9 +538,8 @@ def run_issue(api, issue, config, db):
                 raise Blocked('Working files changed during tests; review before publication')
             if revoked() or stopped():
                 raise Blocked('Authorization revoked before publication')
-            url = api.publish(number, attempt, base, tree, changes)
-            db.execute('UPDATE runs SET status=?,result=? WHERE id=?', ('pr', url, rowid));db.commit()
-            audit('pr_created', issue=number, attempt=attempt, pr=url)
+            url = api.publish(number, attempt, base, tree, changes,
+                record=lambda published: note_publication(db, rowid, number, attempt, published))
             api.feedback(number, f'Draft PR: {url}\nFixed unittest suite: PASS. Files: '+', '.join(x[0] for x in changes)+f'\nAttempt {attempt}/2. Manual acceptance required. Raw logs stay local; Goal/Acceptance must be reviewed in PR.')
     except Exception as exc:
         # Unknown errors are summarized by type; never publish arbitrary stderr/model output.
@@ -547,6 +586,9 @@ def once():
         with sqlite3.connect(RUNTIME / 'state.db') as db:
             db.execute('CREATE TABLE IF NOT EXISTS runs(id INTEGER PRIMARY KEY,issue INTEGER,trigger TEXT,status TEXT,started REAL,day TEXT,result TEXT)')
             db.execute('CREATE TABLE IF NOT EXISTS notices(issue INTEGER,key TEXT,PRIMARY KEY(issue,key))')
+            if stopped() or global_stop(api):
+                audit('global_stop', action='no_github_write')
+                return
             issues = api.pages('/issues?state=open&labels=codex-ready&sort=created&direction=asc')
             for issue in issues:
                 if config['canary_issue'] is not None and issue['number'] != config['canary_issue']:
@@ -556,6 +598,8 @@ def once():
                     return
                 except Blocked as exc:
                     audit('deferred', issue=issue['number'], reason=str(exc))
+                    if str(exc) == 'Global STOP active' or stopped():
+                        return
                     if (not getattr(exc, 'reported', False) and issue.get('user', {}).get('login') in config['allowed_actors']
                             and 'allowlisted' not in str(exc)):
                         key = hashlib.sha256(((issue.get('body') or '')+'\n'+str(exc)).encode()).hexdigest()
