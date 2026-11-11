@@ -83,3 +83,11 @@ class GuardTests(unittest.TestCase):
         with patch('automation.dispatcher.stopped',return_value=False), patch('automation.dispatcher.reserve') as reserve:
             with self.assertRaises(Blocked):run_issue(api,issue(),{'allowed_actors':['owner']},Mock())
             reserve.assert_not_called()
+
+    def test_denied_probe_still_escalates(self):
+        process=Mock(pid=123)
+        def probe(pid,sig):
+            if sig==0:raise PermissionError()
+        with patch('automation.task_guard.os.killpg',side_effect=probe) as kill, patch('automation.task_guard.time.monotonic',side_effect=[0,0,4]), patch('automation.task_guard.time.sleep'):
+            terminate_group(process)
+        self.assertIn(((123,signal.SIGKILL),),kill.call_args_list)

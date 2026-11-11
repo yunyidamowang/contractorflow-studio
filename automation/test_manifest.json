@@ -47,7 +47,7 @@
     "tests/test_studio.py": "a077dc72d8011f86eebe6208015647306db6d81eb49aa180be70921cda894a74",
     "tests/test_trusted_tests.py": "078849d60943cfb9f80e2ac4da7545ca79fdd93df02e34770b0151320480e601",
     "tests/test_test_policy_negative.py": "eb470c1d36f4189212c329e28df7869d8ae56c9bf36078cd44f4a6f196c142ff",
-    "tests/test_task_guard.py": "6928c40560788e31cde2901fe1ac55b579f4b8519664d2f28350e7a2451137f5"
+    "tests/test_task_guard.py": "093868983d3f699b9c770bfdf2b94d3c9a48d7bfad647dab0a544072fc9ff8a3"
   },
   "tests": [
     "test_automation.AutomationTest.test_broker_cannot_merge_delete_or_write_main",
@@ -91,6 +91,7 @@
     "test_task_guard.GuardTests.test_configuration_bounds",
     "test_task_guard.GuardTests.test_dead_leader_descendants_receive_kill",
     "test_task_guard.GuardTests.test_deadline_and_stop_checks",
+    "test_task_guard.GuardTests.test_denied_probe_still_escalates",
     "test_task_guard.GuardTests.test_global_label_rejects_before_reservation",
     "test_task_guard.GuardTests.test_remote_failure_and_stale_state",
     "test_task_guard.GuardTests.test_remote_stop_blocks_post_before_network",

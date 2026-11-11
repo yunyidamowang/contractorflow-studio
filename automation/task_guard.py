@@ -29,6 +29,7 @@ def _terminate_group(process, grace=3):
         process.poll()  # Reap the leader before probing the group.
         try:os.killpg(process.pid, 0)
         except ProcessLookupError:return
+        except PermissionError:pass  # Probe denied: still escalate after the bounded grace.
         time.sleep(.05)
     try:os.killpg(process.pid, signal.SIGKILL)
     except ProcessLookupError:pass
