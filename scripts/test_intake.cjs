@@ -24,18 +24,29 @@ async function run({actor='owner', body, labels=[{name:'codex-ready'}]}={}) {
   await assert.rejects(run({body:'Missing required sections'}),/Missing structured section/);
   await assert.rejects(run({labels:[{name:'codex-ready'},{name:'codex-stop'}]}),/stopped/);
   await run({body:'## Goal\r\nSample\r\n## Acceptance\r\nSample\r\n## Allowed paths\r\n- docs/sample.md\r\n## References\r\nREADME.md'});
+  const reportEnv = JSON.parse(fs.readFileSync('.github/workflows/codex-intake.yml', 'utf8')).jobs['gate-report'].steps[0].env;
+  for (const [key, value] of Object.entries(reportEnv)) {
+    assert.match(key, /^GATE_/);
+    assert.match(value, /^\$\{\{\s*.+\s*\}\}$/);
+    assert.equal(value.includes("vars.CF_ALLOWED_ACTORS }}"), false);
+    assert.equal(value === '${{ github.actor }}' || value === '${{ github.event.issue.user.login }}', false);
+    const body = value.replace(/^\$\{\{\s*/, '').replace(/\s*\}\}$/, '');
+    assert.equal(body.includes('==') || body.includes('!=') || body.startsWith('contains(') || body.startsWith('!contains('), true);
+  }
   const passed = {
     GATE_REPOSITORY:'true', GATE_INTAKE_ENABLED:'true', GATE_STOP_CLEAR:'true', GATE_LABEL:'true',
-    GATE_ISSUE_OPEN:'true', GATE_NOT_PULL_REQUEST:'true', ACTOR:'owner', AUTHOR:'owner',
-    ALLOWED_ACTORS:'["owner"]', LABEL_NAMES:'["codex-ready"]'};
+    GATE_ISSUE_OPEN:'true', GATE_NOT_PULL_REQUEST:'true', GATE_ALLOWLIST_CONFIGURED:'true',
+    GATE_ACTOR_ALLOWLISTED:'true', GATE_AUTHOR_ALLOWLISTED:'true', GATE_STOP_LABEL_ABSENT:'true',
+    GATE_READY_LABEL_PRESENT:'true'};
   const cases = [
     [{...passed, GATE_INTAKE_ENABLED:'false'}, 'intake_job: skipped', 'intake_blocked: intake_disabled'],
-    [{...passed, GATE_LABEL:'false', LABEL_NAMES:'["ZZ-SENTINEL-LABEL"]'}, 'intake_blocked: wrong_label', 'registration_blocked: ready_label_missing'],
-    [{...passed, ACTOR:'ZZ-SENTINEL-ACTOR'}, 'intake_job: runs', 'registration_blocked: wrong_actor'],
-    [{...passed, AUTHOR:'ZZ-SENTINEL-AUTHOR'}, 'registration_blocked: wrong_author'],
-    [{...passed, LABEL_NAMES:'["codex-ready","codex-stop"]'}, 'registration_blocked: stop_label_present'],
+    [{...passed, GATE_LABEL:'false', GATE_READY_LABEL_PRESENT:'false', LEAKED:'ZZ-SENTINEL-LABEL'}, 'intake_blocked: wrong_label', 'registration_blocked: ready_label_missing'],
+    [{...passed, GATE_ACTOR_ALLOWLISTED:'false', LEAKED:'ZZ-SENTINEL-ACTOR'}, 'intake_job: runs', 'registration_blocked: wrong_actor'],
+    [{...passed, GATE_AUTHOR_ALLOWLISTED:'false', LEAKED:'ZZ-SENTINEL-AUTHOR'}, 'registration_blocked: wrong_author'],
+    [{...passed, GATE_STOP_LABEL_ABSENT:'false'}, 'registration_blocked: stop_label_present'],
     [{...passed, GATE_STOP_CLEAR:'false'}, 'intake_blocked: automation_stop'],
     [{...passed, GATE_REPOSITORY:'false'}, 'intake_blocked: wrong_repository'],
+    [{...passed, GATE_ALLOWLIST_CONFIGURED:'false', GATE_ACTOR_ALLOWLISTED:'false', GATE_AUTHOR_ALLOWLISTED:'false'}, 'registration_blocked: allowlist_missing,wrong_actor,wrong_author'],
     [passed, 'intake_job: runs', 'registration_precheck: clear'],
     [{}, 'intake_job: unknown', 'registration_precheck: unknown'],
   ];

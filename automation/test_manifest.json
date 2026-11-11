@@ -43,7 +43,7 @@
   ],
   "baseline_files": {
     "tests/test_automation.py": "7dcde7a2a003ae2a2c27f810eb8b8bce60a48571b3aa1587ec87e750d4fd95b4",
-    "tests/test_intake_gate.py": "d38e9c348094faa4e893d2d390424306e5aed27275d4d8b106a0eb46f590d72f",
+    "tests/test_intake_gate.py": "50911a3f46730fb3b8a99ee0540cd7b91b0d58cb620bf1a79278b7b9c5157790",
     "tests/test_snapshot_recovery.py": "b0a4173296b78fd8c2f0a4daa6356af1d352d02c18523b56e0b9831e6f81bcb4",
     "tests/test_studio.py": "a077dc72d8011f86eebe6208015647306db6d81eb49aa180be70921cda894a74",
     "tests/test_trusted_tests.py": "078849d60943cfb9f80e2ac4da7545ca79fdd93df02e34770b0151320480e601",
@@ -68,6 +68,7 @@
     "test_intake_gate.IntakeGateTests.test_closed_issue_and_pull_request_are_named",
     "test_intake_gate.IntakeGateTests.test_disabled_intake_is_named",
     "test_intake_gate.IntakeGateTests.test_empty_allowlist_blocks_actor_and_author",
+    "test_intake_gate.IntakeGateTests.test_gate_report_env_values_are_boolean_expressions",
     "test_intake_gate.IntakeGateTests.test_multiple_blockers_omit_raw_values",
     "test_intake_gate.IntakeGateTests.test_stop_label_is_named",
     "test_intake_gate.IntakeGateTests.test_stop_variable_and_wrong_repository_are_named",

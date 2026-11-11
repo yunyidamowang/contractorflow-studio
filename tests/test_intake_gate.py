@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+import re
 import subprocess
 import tempfile
 import unittest
@@ -36,6 +37,35 @@ def report_script(data=None):
     return run[start:run.rindex('\nCF_GATE_REPORT')]
 
 
+EXPRESSION = re.compile(r'^\$\{\{\s*(?P<body>.+?)\s*\}\}$')
+RAW_ENV = (
+    '${{ vars.CF_ALLOWED_ACTORS }}',
+    '${{ vars.CF_INTAKE_ENABLED }}',
+    '${{ vars.CF_AUTOMATION_STOP }}',
+    '${{ github.actor }}',
+    '${{ github.event.issue.user.login }}',
+    '${{ toJSON(github.event.issue.labels.*.name) }}',
+)
+
+
+def expression_body(value):
+    match = EXPRESSION.fullmatch(value)
+    if match is None or not match.group('body'):
+        raise AssertionError('not a delimited expression: ' + value)
+    return match.group('body')
+
+
+def assert_boolean_expression(testcase, body):
+    compared = body.startswith('contains(') or body.startswith('!contains(') or ' == ' in body or ' != ' in body
+    testcase.assertTrue(compared, body)
+    testcase.assertNotIn('toJSON', body)
+    for found in re.finditer(r'vars\.[A-Za-z0-9_]+', body):
+        after = body[found.end():]
+        testcase.assertTrue(
+            after.startswith(' == ') or after.startswith(' != ') or after.startswith(" || '[]'"),
+            body)
+
+
 def passing_env(**overrides):
     env = {
         'GATE_REPOSITORY': 'true',
@@ -44,10 +74,11 @@ def passing_env(**overrides):
         'GATE_LABEL': 'true',
         'GATE_ISSUE_OPEN': 'true',
         'GATE_NOT_PULL_REQUEST': 'true',
-        'ACTOR': 'owner',
-        'AUTHOR': 'owner',
-        'ALLOWED_ACTORS': '["owner"]',
-        'LABEL_NAMES': '["codex-ready"]',
+        'GATE_ALLOWLIST_CONFIGURED': 'true',
+        'GATE_ACTOR_ALLOWLISTED': 'true',
+        'GATE_AUTHOR_ALLOWLISTED': 'true',
+        'GATE_STOP_LABEL_ABSENT': 'true',
+        'GATE_READY_LABEL_PRESENT': 'true',
     }
     env.update(overrides)
     return env
@@ -118,12 +149,8 @@ class IntakeGateTests(unittest.TestCase):
         self.assertEqual(len(report['steps']), 1)
         self.assertNotIn('uses', report['steps'][0])
         env = report['steps'][0]['env']
-        clauses = [
-            env['GATE_REPOSITORY'][4:-3],
-            env['GATE_INTAKE_ENABLED'][4:-3],
-            env['GATE_STOP_CLEAR'][4:-3],
-            env['GATE_LABEL'][4:-3],
-        ]
+        clauses = [expression_body(env[name]) for name in (
+            'GATE_REPOSITORY', 'GATE_INTAKE_ENABLED', 'GATE_STOP_CLEAR', 'GATE_LABEL')]
         self.assertEqual(' && '.join(clauses), INTAKE_IF)
         blob = json.dumps(report)
         for banned in WRITE_API:
@@ -141,9 +168,39 @@ class IntakeGateTests(unittest.TestCase):
         self.assertIn('- automation_stop_clear: passed', summary)
         self.assertIn('- event_label_is_codex_ready: passed', summary)
 
+    def test_gate_report_env_values_are_boolean_expressions(self):
+        env = workflow()['jobs']['gate-report']['steps'][0]['env']
+        self.assertEqual(set(env), {
+            'GATE_REPOSITORY', 'GATE_INTAKE_ENABLED', 'GATE_STOP_CLEAR', 'GATE_LABEL',
+            'GATE_ISSUE_OPEN', 'GATE_NOT_PULL_REQUEST', 'GATE_ALLOWLIST_CONFIGURED',
+            'GATE_ACTOR_ALLOWLISTED', 'GATE_AUTHOR_ALLOWLISTED', 'GATE_STOP_LABEL_ABSENT',
+            'GATE_READY_LABEL_PRESENT'})
+        for key, value in env.items():
+            self.assertTrue(key.startswith('GATE_'), key)
+            assert_boolean_expression(self, expression_body(value))
+        self.assertEqual(env['GATE_ALLOWLIST_CONFIGURED'], "${{ vars.CF_ALLOWED_ACTORS != '' }}")
+        self.assertEqual(
+            env['GATE_ACTOR_ALLOWLISTED'],
+            "${{ contains(fromJSON(vars.CF_ALLOWED_ACTORS || '[]'), github.actor) }}")
+        self.assertEqual(
+            env['GATE_AUTHOR_ALLOWLISTED'],
+            "${{ contains(fromJSON(vars.CF_ALLOWED_ACTORS || '[]'), github.event.issue.user.login) }}")
+        self.assertEqual(
+            env['GATE_STOP_LABEL_ABSENT'],
+            "${{ !contains(github.event.issue.labels.*.name, 'codex-stop') }}")
+        self.assertEqual(
+            env['GATE_READY_LABEL_PRESENT'],
+            "${{ contains(github.event.issue.labels.*.name, 'codex-ready') }}")
+        blob = json.dumps(workflow()['jobs']['gate-report'])
+        for raw in RAW_ENV:
+            self.assertNotIn(raw, blob)
+        script = report_script()
+        for leaked in ('ALLOWED_ACTORS', 'LABEL_NAMES', 'JSON.parse', 'toJSON', 'github.actor'):
+            self.assertNotIn(leaked, script)
+
     def test_wrong_label_is_named_without_echoing_it(self):
         summary = self.assert_report(
-            passing_env(GATE_LABEL='false', LABEL_NAMES='["ZZ-SENTINEL-LABEL"]'),
+            passing_env(GATE_LABEL='false', GATE_READY_LABEL_PRESENT='false', LEAKED_LABEL='ZZ-SENTINEL-LABEL'),
             'skipped', ['wrong_label'], 'blocked', ['ready_label_missing'], [],
             absent=('ZZ-SENTINEL-LABEL',))
         self.assertIn('- event_label_is_codex_ready: blocked', summary)
@@ -152,16 +209,18 @@ class IntakeGateTests(unittest.TestCase):
 
     def test_wrong_actor_and_author_are_named(self):
         summary = self.assert_report(
-            passing_env(ACTOR='ZZ-SENTINEL-ACTOR', AUTHOR='ZZ-SENTINEL-AUTHOR', ALLOWED_ACTORS='["owner"]'),
+            passing_env(
+                GATE_ACTOR_ALLOWLISTED='false', GATE_AUTHOR_ALLOWLISTED='false',
+                LEAKED_ACTOR='ZZ-SENTINEL-ACTOR', LEAKED_AUTHOR='ZZ-SENTINEL-AUTHOR'),
             'runs', [], 'blocked', ['wrong_actor', 'wrong_author'], [],
-            absent=('ZZ-SENTINEL-ACTOR', 'ZZ-SENTINEL-AUTHOR', '["owner"]'))
+            absent=('ZZ-SENTINEL-ACTOR', 'ZZ-SENTINEL-AUTHOR'))
         self.assertIn('- actor_allowlisted: blocked', summary)
         self.assertIn('- author_allowlisted: blocked', summary)
         self.assertIn('- allowlist_configured: passed', summary)
 
     def test_stop_label_is_named(self):
         summary = self.assert_report(
-            passing_env(LABEL_NAMES='["codex-ready","codex-stop"]'),
+            passing_env(GATE_STOP_LABEL_ABSENT='false'),
             'runs', [], 'blocked', ['stop_label_present'], [])
         self.assertIn('- stop_label_absent: blocked', summary)
         self.assertIn('- event_label_is_codex_ready: passed', summary)
@@ -188,10 +247,14 @@ class IntakeGateTests(unittest.TestCase):
                 GATE_LABEL='false',
                 GATE_ISSUE_OPEN='false',
                 GATE_NOT_PULL_REQUEST='false',
-                ACTOR='ZZ-SENTINEL-ACTOR',
-                AUTHOR='owner',
-                ALLOWED_ACTORS='["owner","ZZ-SECRET-ALLOW"]',
-                LABEL_NAMES='["ZZ-SENTINEL-LABEL","codex-stop"]',
+                GATE_ALLOWLIST_CONFIGURED='true',
+                GATE_ACTOR_ALLOWLISTED='false',
+                GATE_AUTHOR_ALLOWLISTED='true',
+                GATE_STOP_LABEL_ABSENT='false',
+                GATE_READY_LABEL_PRESENT='false',
+                LEAKED_ACTOR='ZZ-SENTINEL-ACTOR',
+                LEAKED_LABEL='ZZ-SENTINEL-LABEL',
+                LEAKED_ALLOWLIST='ZZ-SECRET-ALLOW',
                 CF_INTAKE_ENABLED='ZZ-SECRET-ENABLED',
                 CF_AUTOMATION_STOP='ZZ-SECRET-STOP',
             ),
@@ -212,20 +275,20 @@ class IntakeGateTests(unittest.TestCase):
 
     def test_unreadable_inputs_stay_unknown(self):
         summary = self.assert_report(
-            {'ALLOWED_ACTORS': '{"not":"a list"}', 'LABEL_NAMES': 'codex-stop', 'GATE_INTAKE_ENABLED': 'TRUE'},
+            {'GATE_INTAKE_ENABLED': 'TRUE', 'LEAKED_ALLOWLIST': 'ZZ-SECRET-ALLOW', 'LEAKED_LABEL': 'ZZ-SENTINEL-LABEL'},
             'unknown', [], 'unknown', [],
             [
                 'repository_matches', 'intake_enabled', 'automation_stop_clear', 'event_label_is_codex_ready',
                 'allowlist_configured', 'actor_allowlisted', 'author_allowlisted',
                 'stop_label_absent', 'ready_label_present', 'issue_open', 'not_pull_request',
             ],
-            absent=('codex-stop', '{"not":"a list"}', 'TRUE'))
+            absent=('ZZ-SECRET-ALLOW', 'ZZ-SENTINEL-LABEL', 'TRUE'))
         for code in ('wrong_actor', 'wrong_author', 'intake_disabled', 'stop_label_present', 'wrong_label'):
             self.assertNotIn(code, summary)
 
     def test_empty_allowlist_blocks_actor_and_author(self):
         summary = self.assert_report(
-            passing_env(ALLOWED_ACTORS='[]', ACTOR='', AUTHOR=''),
+            passing_env(GATE_ACTOR_ALLOWLISTED='false', GATE_AUTHOR_ALLOWLISTED='false'),
             'runs', [], 'blocked', ['wrong_actor', 'wrong_author'], [])
         self.assertIn('- allowlist_configured: passed', summary)
 
