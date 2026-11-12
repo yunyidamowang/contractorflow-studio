@@ -7,20 +7,28 @@ const assert = require('node:assert/strict');
 const script = JSON.parse(fs.readFileSync('.github/workflows/codex-intake.yml', 'utf8'))
   .jobs.intake.steps[0].with.script;
 const AsyncFunction = Object.getPrototypeOf(async function() {}).constructor;
-async function run({actor='owner', body, labels=[{name:'codex-ready'}]}={}) {
+async function run({actor='owner', body, labels=[{name:'codex-ready'}], actors='["owner"]'}={}) {
   const comments=[];
   const issue={number:4,state:'open',user:{login:'owner'},labels,
     body:body ?? '## Goal\nSample\n## Acceptance\nSample\n## Allowed paths\n- docs/sample.md\n## References\nREADME.md'};
   const context={repo:{owner:'yunyidamowang',repo:'contractorflow-studio'},payload:{issue},actor,runId:42};
   const github={rest:{issues:{get:async()=>({data:issue}),createComment:async x=>comments.push(x)}}};
   const summary={addHeading(){return this},addRaw(){return this},async write(){}};
-  await new AsyncFunction('github','context','core','process',script)(github,context,{summary},{env:{ALLOWED_ACTORS:'["owner"]'}});
+  await new AsyncFunction('github','context','core','process',script)(github,context,{summary},{env:{ALLOWED_ACTORS:actors}});
   return comments;
 }
 (async()=>{
   const comments=await run();assert.equal(comments.length,1);
   assert.match(comments[0].body,/\nTask registered/);
   await assert.rejects(run({actor:'stranger'}),/not allowlisted/);
+  await assert.rejects(run({actors:'"owner"'}),/not allowlisted/);
+  await assert.rejects(run({actors:'"owner-extra"'}),/not allowlisted/);
+  await assert.rejects(run({actors:'{"owner":true}'}),/not allowlisted/);
+  await assert.rejects(run({actors:'true'}),/not allowlisted/);
+  await assert.rejects(run({actors:'null'}),/not allowlisted/);
+  await assert.rejects(run({actors:'12'}),/not allowlisted/);
+  await assert.rejects(run({actors:'[]'}),/not allowlisted/);
+  await assert.rejects(run({actors:'["guest"]'}),/not allowlisted/);
   await assert.rejects(run({body:'Missing required sections'}),/Missing structured section/);
   await assert.rejects(run({labels:[{name:'codex-ready'},{name:'codex-stop'}]}),/stopped/);
   await run({body:'## Goal\r\nSample\r\n## Acceptance\r\nSample\r\n## Allowed paths\r\n- docs/sample.md\r\n## References\r\nREADME.md'});
@@ -31,7 +39,10 @@ async function run({actor='owner', body, labels=[{name:'codex-ready'}]}={}) {
     assert.equal(value.includes("vars.CF_ALLOWED_ACTORS }}"), false);
     assert.equal(value === '${{ github.actor }}' || value === '${{ github.event.issue.user.login }}', false);
     const body = value.replace(/^\$\{\{\s*/, '').replace(/\s*\}\}$/, '');
-    assert.equal(body.includes('==') || body.includes('!=') || body.startsWith('contains(') || body.startsWith('!contains('), true);
+    const arrayGuard = body.startsWith('startsWith(toJSON(fromJSON(') && body.includes('&&');
+    assert.equal(body.includes('==') || body.includes('!=') || body.startsWith('contains(') || body.startsWith('!contains(') || arrayGuard, true);
+    assert.equal(body.includes('toJSON(github'), false);
+    if (body.includes('toJSON')) assert.equal(body.includes("startsWith(toJSON(fromJSON(vars.CF_ALLOWED_ACTORS || '[]')), '[')"), true);
   }
   const passed = {
     GATE_REPOSITORY:'true', GATE_INTAKE_ENABLED:'true', GATE_STOP_CLEAR:'true', GATE_LABEL:'true',

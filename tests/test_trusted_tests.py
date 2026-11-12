@@ -2,13 +2,16 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 from automation.trusted_tests import validate
 
 class TrustedTests(unittest.TestCase):
     def test_empty_collection_rejected(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d);(root/'tests').mkdir();(root/'tests/__init__.py').touch()
-            with self.assertRaises(ValueError):validate(root,{'baseline_files':{},'tests':[]})
+            # A fresh loader: Python 3.12.3 keeps the first discovery root on the shared loader.
+            with patch('automation.trusted_tests.unittest.defaultTestLoader', unittest.TestLoader()):
+                with self.assertRaises(ValueError):validate(root,{'baseline_files':{},'tests':[]})
 
     def test_baseline_tamper_rejected(self):
         with tempfile.TemporaryDirectory() as d:
