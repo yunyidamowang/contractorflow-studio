@@ -110,3 +110,17 @@ The unique key is `(repo, issue, authorization version, trigger)`. The default a
 States: `queued`, `claimed`, `snapshot`, `model`, `testing`, `publishing`, `feedback_pending`, `review`, `blocked`, `stopped`, `interrupted`.
 
 Not in this slice: POST reconciliation after a publish whose result is unknown, a launchd sample, and an audit export or hash-chain anchor. Those remain follow-ups. No once, watch, model call, ledger migration, label, variable, secret, or branch-rule change was run.
+
+## P1b publish uncertainty, feedback repost, and circuit breaker (2026-11-12)
+
+This slice stays off unless settings contain `publish_reconcile.enabled` set exactly to true and `task_queue.enabled` set exactly to true. `automation/settings.example.json` contains neither key. `enabled` remains false and `canary_issue` remains 4. The dispatcher does not migrate a database and still refuses a file named `state.db`.
+
+A create POST is one attempt. `GitHub.api` still retries a read-only GET at most three times. That retry loop is not used to repeat a branch create, a pull create, or a comment create. If a publish write times out, or the process cannot tell whether it landed, the attempt becomes `publish_unknown` and further creates for that task stop. Reconciliation then uses read-only GETs of the recorded branch name, commit, linked draft PR, and the feedback marker `<!-- cf-codex-feedback -->`. A proved match is stored and the attempt moves to `feedback_pending`. A proved absence, or a branch with no matching draft PR, stays blocked for a person. An undecided read stays blocked. None of those outcomes sends the create again, and none starts the model again.
+
+If the draft PR is already recorded and the redacted feedback comment failed, the only automatic write is that same redacted comment. It is sent only when a read shows the feedback marker is absent. The queue counts each send before the POST, allows at most two, and also refuses a send more than 24 hours after the first. The count is not reset. The acceptance comment uses the older worker marker and does not count as this feedback.
+
+The circuit breaker is a mode-0600 file beside the queue database, or the path in `publish_reconcile.breaker`. It is not `state.db`. These events latch it: auth failure (HTTP 401 or 403), `main` no longer protected, repository policy drift (`full_name`, visibility, or `allow_auto_merge`), ledger corruption or a schema the process will not alter, a duplicate claim while the breaker is attached, a write that cannot be reconciled, or a failed trusted-test result. The first reason is kept. No function in this repository deletes or rewrites that file. Clearing it is a manual owner step: stop the worker, set `enabled` false, read the one-line reason, review the queue row, and delete only that breaker file. Deleting the queue database is not the clear procedure. A later process still sees the latch.
+
+`publish_unknown` is not turned into `interrupted` when its lease expires, and an expired `publishing` row that already recorded a branch becomes `publish_unknown` instead of losing that name. Reserved attempts are not deleted or refunded. `once()` calls the read-only recovery only when this feature is exactly enabled and the global stop is not active. This change did not run `once` or `watch`.
+
+A queue file created by the P1a migration does not gain the new columns automatically. Opening that file fails closed. There is no automatic `ALTER`. Launchd and the audit hash chain remain later work.

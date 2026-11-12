@@ -50,7 +50,8 @@
     "tests/test_test_policy_negative.py": "eb470c1d36f4189212c329e28df7869d8ae56c9bf36078cd44f4a6f196c142ff",
     "tests/test_task_guard.py": "101a553ae0a9c33b8210f97d87a19d4ea4d9205c3c8ecf95ca63f4ea0f59f829",
     "tests/test_public_hygiene.py": "3b0dc21db98c20e6f1d8bb9101823480b6ce98db3da71f9fceb6ef28486de188",
-    "tests/test_task_queue.py": "8af0f46e855a88ee658811d45aae16c008645438ed8f8a42d0cbf42bb36643ab"
+    "tests/test_task_queue.py": "8af0f46e855a88ee658811d45aae16c008645438ed8f8a42d0cbf42bb36643ab",
+    "tests/test_publish_reconcile.py": "974f70927f15f3a1ea9165a88bd2200234446a79d0de455e842fa26e24168f47"
   },
   "tests": [
     "test_automation.AutomationTest.test_broker_cannot_merge_delete_or_write_main",
@@ -161,7 +162,26 @@
     "test_task_queue.QueueTests.test_unconfigured_dispatcher_matches_current_behavior",
     "test_task_queue.QueueTests.test_configured_dispatcher_reserves_before_model",
     "test_task_queue.QueueTests.test_dispatcher_stale_fence_blocks_publish",
-    "test_task_queue.QueueTests.test_example_settings_leave_queue_unconfigured"
+    "test_task_queue.QueueTests.test_example_settings_leave_queue_unconfigured",
+    "test_publish_reconcile.PublishReconcileTests.test_absent_and_partial_do_not_resend",
+    "test_publish_reconcile.PublishReconcileTests.test_breaker_latched_across_restart",
+    "test_publish_reconcile.PublishReconcileTests.test_crash_between_publish_and_feedback",
+    "test_publish_reconcile.PublishReconcileTests.test_create_post_is_single_attempt",
+    "test_publish_reconcile.PublishReconcileTests.test_duplicate_claim_latches",
+    "test_publish_reconcile.PublishReconcileTests.test_feature_stays_off",
+    "test_publish_reconcile.PublishReconcileTests.test_feedback_cap_reached",
+    "test_publish_reconcile.PublishReconcileTests.test_feedback_timeout_reposts_once",
+    "test_publish_reconcile.PublishReconcileTests.test_get_retry_separated_from_write_recovery",
+    "test_publish_reconcile.PublishReconcileTests.test_ledger_corruption_latches",
+    "test_publish_reconcile.PublishReconcileTests.test_marker_already_present",
+    "test_publish_reconcile.PublishReconcileTests.test_network_down_blocks_without_second_post",
+    "test_publish_reconcile.PublishReconcileTests.test_policy_and_protection_drift_stop_before_model",
+    "test_publish_reconcile.PublishReconcileTests.test_publish_timeout_branches",
+    "test_publish_reconcile.PublishReconcileTests.test_publish_unknown_survives_restart_without_model",
+    "test_publish_reconcile.PublishReconcileTests.test_readonly_decision_covers_exists_absent_partial_and_unknown",
+    "test_publish_reconcile.PublishReconcileTests.test_safety_test_failure_latches",
+    "test_publish_reconcile.PublishReconcileTests.test_token_expired_latches_breaker",
+    "test_publish_reconcile.PublishReconcileTests.test_undecided_write_latches_and_blocks"
   ],
   "original_baseline_files": {
     "tests/test_automation.py": "ee3ca82718f659c8b92acb9338b42bd1a2a36125111cf25338be45dd1ce34cab",

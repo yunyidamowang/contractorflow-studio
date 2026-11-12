@@ -113,3 +113,15 @@ Python 3.12.3: unittest discover 109/109 in 2.236s. Exact manifest runner 109/10
 Not in this slice: POST reconciliation, a launchd sample, and audit export. Not run: macOS, dispatcher once/watch, a live model, a migration against a real ledger, and any write of repository variables, secrets, labels, or branch protection. PR #7 was not updated.
 
 Head `983a0d63be29eb2ea00c5c263d8807e30420f47f`: Actions run https://github.com/yunyidamowang/contractorflow-studio/actions/runs/43163109679 completed at 2026-11-12T13:41:59+08:00. cf-tests (head), cf-tests (merge), and cf-ci-gate all succeeded.
+
+## P1b / CF-20261112-032 (2026-11-12)
+
+Unknown GitHub writes do not start a second model run and do not repeat a create. The attempt becomes `publish_unknown` and is reconciled with read-only GETs. A proved object is recorded and moves to `feedback_pending`. A proved absence or a branch without a matching draft PR stays blocked, with no automatic resend. An undecided read stays blocked. The redacted feedback comment can be posted again only when its marker is absent, at most twice, and never by restarting the model. Auth, protection, or policy drift, ledger corruption, a duplicate claim, an unreconcilable write, and a failed safety test latch a breaker file. No code path clears that file.
+
+The path stays off unless `publish_reconcile.enabled` and `task_queue.enabled` are both exactly true. Example settings omit both keys. `enabled` remains false and `canary_issue` remains 4.
+
+Python 3.12.3: unittest discover 128/128 in 2.748s. Exact manifest runner 128/128 in 2.663s, `CF_TEST_RESULT` success true, count 128. Nineteen new names, none removed or renamed. The new file's baseline hash was added. Other baseline hashes, `original_baseline_files`, and `baseline_tests` are unchanged. `ci.yml` SHA256 remains `4576223a294403ed8e15536941da5d73110c9f157bbf1bc3a008872dce62260d`.
+
+Not in this slice: a launchd sample and an audit hash chain. Not run: macOS, dispatcher once/watch, a live model, a migration against a real ledger, and any write of repository variables, secrets, labels, or branch protection. PR #7 was not updated. Issue #10 was not closed.
+
+Implementation head `c025fbda7444df54b09d75bd80b2e0ac2f10a317`: Actions run https://github.com/yunyidamowang/contractorflow-studio/actions/runs/43194516350 completed at 2026-11-12T17:47:26+08:00. cf-tests (head), cf-tests (merge), and cf-ci-gate all succeeded. The commit that records this sentence is a later head. Its own Actions result is not claimed until that run finishes.

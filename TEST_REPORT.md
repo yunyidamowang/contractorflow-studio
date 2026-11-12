@@ -135,3 +135,13 @@ The new tests use temporary fixture databases. They cover a duplicate claim, two
 Head `983a0d63be29eb2ea00c5c263d8807e30420f47f`: Actions run https://github.com/yunyidamowang/contractorflow-studio/actions/runs/43163109679 completed at 2026-11-12T13:41:59+08:00. cf-tests (head), cf-tests (merge), and cf-ci-gate all succeeded.
 
 Not run: macOS, the live `.automation` directory, and a migration of a real ledger.
+
+## P1b / CF-20261112-032 (2026-11-12)
+
+Python 3.12.3 on this Linux environment: `.venv/bin/python -m unittest discover -s tests -v` 128/128 in 2.748s. Exact manifest runner 128/128 in 2.663s, `CF_TEST_RESULT` success true, count 128. Nineteen new names in `tests/test_publish_reconcile.py`. No previous name was removed or renamed. The new file's baseline hash was added. Other baseline hashes, `original_baseline_files`, and `baseline_tests` are unchanged. `ci.yml` SHA256 remains `4576223a294403ed8e15536941da5d73110c9f157bbf1bc3a008872dce62260d`.
+
+The new tests use temporary fixture databases and a fake HTTP layer. They cover one create attempt, a read-only exists/absent/partial/unknown decision, GET retries staying in `GitHub.api`, `publish_unknown` surviving restart, a crash between the recorded PR and the feedback comment, a marker that is already present, a feedback cap and the 24 hour window, token expiry, network loss, a rejected create that is not resent, duplicate claim, ledger corruption, a failed safety result, policy drift, and branch-protection drift. The breaker file is still present after a new object opens it, and the module has no clear or delete path. Example settings still omit `publish_reconcile` and `task_queue`. No real ledger file was opened. No model, network call, once, or watch was run.
+
+Not run: macOS, `node scripts/test_intake.cjs` (the intake workflow was not edited), the live `.automation` directory, and a migration of a real ledger.
+
+Implementation head `c025fbda7444df54b09d75bd80b2e0ac2f10a317`: Actions run https://github.com/yunyidamowang/contractorflow-studio/actions/runs/43194516350 completed at 2026-11-12T17:47:26+08:00. cf-tests (head), cf-tests (merge), and cf-ci-gate all succeeded. The commit that records this sentence is a later head. Its own Actions result is not claimed until that run finishes.
