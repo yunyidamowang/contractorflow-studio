@@ -138,4 +138,4 @@ Covered on fixtures: duplicate claim, two processes, simulated kill after each c
 
 Not run: macOS, launchd load, dispatcher once/watch, a live model, a real GitHub POST, a migration of a real ledger, and any write of repository variables, secrets, labels, or branch protection. PR #7 was not updated. Issue #10 was not closed. A torn disk page and a real power cut were not performed; the kill tests signal the process after the stage commit.
 
-Actions for this head are not claimed until that run finishes.
+Implementation head `f06a44c4878915387348f23d80a522a513cef700`: Actions run https://github.com/yunyidamowang/contractorflow-studio/actions/runs/43228201885 completed at 2026-11-12T21:32:29+08:00. cf-tests (head), cf-tests (merge), and cf-ci-gate all succeeded. The commit that records this sentence is a later head. Its own Actions result is not claimed until that run finishes.
