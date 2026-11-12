@@ -51,7 +51,8 @@
     "tests/test_task_guard.py": "101a553ae0a9c33b8210f97d87a19d4ea4d9205c3c8ecf95ca63f4ea0f59f829",
     "tests/test_public_hygiene.py": "3b0dc21db98c20e6f1d8bb9101823480b6ce98db3da71f9fceb6ef28486de188",
     "tests/test_task_queue.py": "8af0f46e855a88ee658811d45aae16c008645438ed8f8a42d0cbf42bb36643ab",
-    "tests/test_publish_reconcile.py": "974f70927f15f3a1ea9165a88bd2200234446a79d0de455e842fa26e24168f47"
+    "tests/test_publish_reconcile.py": "974f70927f15f3a1ea9165a88bd2200234446a79d0de455e842fa26e24168f47",
+    "tests/test_p1_acceptance.py": "031a5bdbc0ef8d0b61e6485d1baf68003cb3432bee1d6b822c024aba1d8b6015"
   },
   "tests": [
     "test_automation.AutomationTest.test_broker_cannot_merge_delete_or_write_main",
@@ -181,7 +182,24 @@
     "test_publish_reconcile.PublishReconcileTests.test_readonly_decision_covers_exists_absent_partial_and_unknown",
     "test_publish_reconcile.PublishReconcileTests.test_safety_test_failure_latches",
     "test_publish_reconcile.PublishReconcileTests.test_token_expired_latches_breaker",
-    "test_publish_reconcile.PublishReconcileTests.test_undecided_write_latches_and_blocks"
+    "test_publish_reconcile.PublishReconcileTests.test_undecided_write_latches_and_blocks",
+    "test_p1_acceptance.P1AcceptanceTests.test_chain_export_is_redacted_and_linked",
+    "test_p1_acceptance.P1AcceptanceTests.test_chain_recording_requires_explicit_key",
+    "test_p1_acceptance.P1AcceptanceTests.test_chain_reports_tamper_deletion_reorder_and_truncation",
+    "test_p1_acceptance.P1AcceptanceTests.test_crash_between_publish_and_feedback",
+    "test_p1_acceptance.P1AcceptanceTests.test_duplicate_claim_does_not_start_twice",
+    "test_p1_acceptance.P1AcceptanceTests.test_example_settings_omit_p1_keys",
+    "test_p1_acceptance.P1AcceptanceTests.test_launchd_sample_is_not_installed",
+    "test_p1_acceptance.P1AcceptanceTests.test_ledger_corruption_is_not_a_valid_chain",
+    "test_p1_acceptance.P1AcceptanceTests.test_ledger_proof_preserves_canary_rows_on_a_copy",
+    "test_p1_acceptance.P1AcceptanceTests.test_ledger_proof_refuses_state_db_without_fixture",
+    "test_p1_acceptance.P1AcceptanceTests.test_network_loss_blocks_without_a_second_post",
+    "test_p1_acceptance.P1AcceptanceTests.test_open_failed_chain_fails_closed",
+    "test_p1_acceptance.P1AcceptanceTests.test_power_loss_at_each_stage",
+    "test_p1_acceptance.P1AcceptanceTests.test_restart_does_not_continue_the_attempt",
+    "test_p1_acceptance.P1AcceptanceTests.test_token_expiry_blocks_without_a_second_start",
+    "test_p1_acceptance.P1AcceptanceTests.test_two_processes_one_claim",
+    "test_p1_acceptance.P1AcceptanceTests.test_unknown_state_ends_blocked"
   ],
   "original_baseline_files": {
     "tests/test_automation.py": "ee3ca82718f659c8b92acb9338b42bd1a2a36125111cf25338be45dd1ce34cab",

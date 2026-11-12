@@ -412,6 +412,26 @@ def _queue_spec(config):
     return spec
 
 
+def _audit_chain_enabled(config):
+    spec = config.get('audit_chain') if isinstance(config, dict) else None
+    return isinstance(spec, dict) and spec.get('enabled') is True
+
+
+def _remember_latch(breaker, reason, queue=None):
+    """Latch the breaker file. A new latch is also one redacted chain event when recording is on."""
+    try:
+        before = breaker.reason()
+    except Exception:
+        before = 'unreconcilable_write'
+    breaker.latch(reason)
+    if before is not None or queue is None or not getattr(queue, 'audit', False):
+        return
+    try:
+        queue.note_breaker(reason)
+    except Exception:
+        return
+
+
 def _queue_seconds(spec, key, default):
     if key not in spec:
         return default
@@ -447,7 +467,8 @@ def _queue_prepare(config, db, number, trigger, breaker=None):
         if type(auth) is not str or not auth:
             raise ValueError
         queue = task_queue.Queue(database, lock_path=lock if type(lock) is str else None,
-            lease_ms=lease * 1000, heartbeat_ms=beat * 1000, breaker=breaker)
+            lease_ms=lease * 1000, heartbeat_ms=beat * 1000, breaker=breaker,
+            audit=_audit_chain_enabled(config))
         queue.reconcile()  # Expired leases become interrupted. This does not claim or start a model.
         return queue.activate(repo=REPO, issue=number, authorization_version=auth, trigger=str(trigger),
             day=day, max_attempts=config['max_attempts_per_issue'], max_daily=config['max_runs_per_day'],
@@ -540,18 +561,18 @@ def _read_comments(api, number):
     return (200, rows)
 
 
-def _assert_controls(api, breaker):
+def _assert_controls(api, breaker, queue=None):
     from automation.publish_reconcile import classify_blocked, observe_controls
     try:
         repo = api.api('GET', '')
         branch = api.api('GET', '/branches/main')
     except Blocked as exc:
         kind = classify_blocked(str(exc))
-        breaker.latch('auth' if kind == 'auth' else 'unreconcilable_write')
+        _remember_latch(breaker, 'auth' if kind == 'auth' else 'unreconcilable_write', queue)
         raise Blocked('Publish reconcile failed closed') from None
     reason = observe_controls(repo, branch)
     if reason:
-        breaker.latch(reason)
+        _remember_latch(breaker, reason, queue)
         raise Blocked('Publish reconcile failed closed')
 
 
@@ -579,7 +600,7 @@ def _reconcile_publish(api, queue, task_id, breaker):
     commit_view = _logical_get(api, '/git/commits/' + commit)
     outcome, url = decide_publish(ref, pulls, commit_view, branch, commit)
     if outcome == 'auth':
-        breaker.latch('auth')
+        _remember_latch(breaker, 'auth', queue)
         queue.apply_reconciliation(task_id, 'unknown')
         return 'unknown'
     queue.apply_reconciliation(task_id, outcome, url=url)
@@ -593,16 +614,16 @@ def _feedback_once(api, queue, task_id, number, body, breaker):
         raise Blocked('circuit breaker latched')
     view = _read_comments(api, number)
     if view is None or view[0] not in (200, 401, 403):
-        breaker.latch('unreconcilable_write')
+        _remember_latch(breaker, 'unreconcilable_write', queue)
         queue.block_feedback(task_id, 'feedback_unknown')
         return 'unknown'
     if view[0] in (401, 403):
-        breaker.latch('auth')
+        _remember_latch(breaker, 'auth', queue)
         queue.block_feedback(task_id, 'feedback_unknown')
         return 'unknown'
     present = marker_present(view[1], FEEDBACK_MARKER)
     if present is None:
-        breaker.latch('unreconcilable_write')
+        _remember_latch(breaker, 'unreconcilable_write', queue)
         queue.block_feedback(task_id, 'feedback_unknown')
         return 'unknown'
     if present:
@@ -619,7 +640,7 @@ def _feedback_once(api, queue, task_id, number, body, breaker):
         api.feedback(number, body)
     except Blocked as exc:
         if classify_blocked(str(exc)) == 'auth':
-            breaker.latch('auth')
+            _remember_latch(breaker, 'auth', queue)
             queue.block_feedback(task_id, 'feedback_unknown')
             return 'unknown'
         return 'unconfirmed'
@@ -664,11 +685,11 @@ def _enabled_publication(api, hold, breaker, db, rowid, number, attempt, base, t
             posted = True
         except WriteFailed as exc:
             if exc.kind == 'auth':
-                breaker.latch('auth')
+                _remember_latch(breaker, 'auth', hold.queue)
         except TaskStopped:
             raise
         except Exception:
-            breaker.latch('unreconcilable_write')
+            _remember_latch(breaker, 'unreconcilable_write', hold.queue)
     finally:
         signal.pthread_sigmask(signal.SIG_SETMASK, mask)
     if posted:
@@ -680,7 +701,7 @@ def _enabled_publication(api, hold, breaker, db, rowid, number, attempt, base, t
         if hold.queue.fetch(hold.task_id)['state'] == 'publish_unknown':
             outcome = _reconcile_publish(api, hold.queue, hold.task_id, breaker)
     except Exception:
-        breaker.latch('unreconcilable_write')
+        _remember_latch(breaker, 'unreconcilable_write', hold.queue)
         raise Blocked('publish result unknown') from None
     if outcome == 'exists' and not breaker.latched():
         url = hold.queue.fetch(hold.task_id)['published_url']
@@ -721,7 +742,8 @@ def _recover_open(api, config):
     lock = spec.get('lock')
     try:
         queue = task_queue.Queue(database, lock_path=lock if type(lock) is str else None,
-            lease_ms=lease * 1000, heartbeat_ms=beat * 1000, breaker=breaker)
+            lease_ms=lease * 1000, heartbeat_ms=beat * 1000, breaker=breaker,
+            audit=_audit_chain_enabled(config))
         queue.reconcile()
     except task_queue.QueueError:
         raise Blocked('Publish reconcile failed closed') from None
@@ -902,7 +924,7 @@ def run_issue(api, issue, config, db):
     try:
         with guard:
             if breaker is not None:
-                _assert_controls(api, breaker)
+                _assert_controls(api, breaker, None if hold is None else hold.queue)
             checkout.mkdir(parents=True)
             audit('started', issue=number, attempt=attempt, trigger=trigger,
                   task_sha256=hashlib.sha256(json.dumps(task, sort_keys=True).encode()).hexdigest())
@@ -936,7 +958,7 @@ def run_issue(api, issue, config, db):
                 verify_test_result(test_log, policy)
             except Blocked:
                 if breaker is not None:
-                    breaker.latch('safety_test')
+                    _remember_latch(breaker, 'safety_test', None if hold is None else hold.queue)
                 raise
             if diff(checkout, task['allowed_paths']) != changes:
                 raise Blocked('Working files changed during tests; review before publication')
@@ -944,7 +966,7 @@ def run_issue(api, issue, config, db):
                 raise Blocked('Authorization revoked before publication')
             _queue_stage(hold, 'publishing')
             if breaker is not None:
-                _assert_controls(api, breaker)
+                _assert_controls(api, breaker, None if hold is None else hold.queue)
                 _enabled_publication(api, hold, breaker, db, rowid, number, attempt, base, tree, changes)
             else:
                 url = api.publish(number, attempt, base, tree, changes,
