@@ -103,3 +103,11 @@ Documentation for the repository owner. Dual identity is not solved. The pilot s
 `docs/automation/P0_IDENTITY.md` is the endpoint-to-permission matrix for planner, publisher, CI, and user, the two-app route, the single optional machine account, rotation and revocation drills, noreply commits, and 0600/0700 credential storage. `docs/automation/P0_SECURITY_SETTINGS.md` is the owner checklist for secret-scanning alerts, push protection, Dependabot alerts, and `cf-ci-gate` as a required check. Each of those is a USER step. Reads that returned HTTP 403, or `security_and_analysis: null`, are marked UNVERIFIED. The public repository payload did show `allow_auto_merge` false; the settings page was not opened.
 
 Python 3.12.3: unittest discover 93/93 in 1.861s. Exact manifest runner 93/93 in 1.934s, `CF_TEST_RESULT` success true, count 93. Two new test names, none removed or renamed. `ci.yml` SHA256 remains `4576223a294403ed8e15536941da5d73110c9f157bbf1bc3a008872dce62260d`. macOS, Keychain, dispatcher once/watch, and the live `.automation` directory were not run or read. PR #7 was read only and was not closed, merged, or updated.
+
+## P1a / CF-20261112-029 (2026-11-12)
+
+Single-machine queue, atomic claim, lease, and fencing. New versioned tables only; the dispatcher does not migrate, and a database named `state.db` is refused. The feature stays off unless `task_queue.enabled` is exactly true. Example settings omit that key. `enabled` remains false and `canary_issue` remains 4. An expired lease becomes `interrupted` and is not a second model run. Reserved attempts are not refunded. Unknown state is `blocked`.
+
+Python 3.12.3: unittest discover 109/109 in 2.236s. Exact manifest runner 109/109 in 2.162s, `CF_TEST_RESULT` success true, count 109. Sixteen new names, none removed or renamed. The new file's baseline hash was added. Other baseline hashes, `original_baseline_files`, and `baseline_tests` are unchanged. `ci.yml` SHA256 remains `4576223a294403ed8e15536941da5d73110c9f157bbf1bc3a008872dce62260d`.
+
+Not in this slice: POST reconciliation, a launchd sample, and audit export. Not run: macOS, dispatcher once/watch, a live model, a migration against a real ledger, and any write of repository variables, secrets, labels, or branch protection. CI check links are recorded after the draft PR's checks finish. PR #7 was not updated.

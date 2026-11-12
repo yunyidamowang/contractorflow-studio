@@ -33,3 +33,5 @@
 - D021（2026-11-07）：用户选择继续GitHub Free并公开原仓库，已在获知历史个人邮箱、Issue身份说明及内部商业材料后明确坚持原样公开；不另建仓库、不购买套餐。最终网页确认由用户操作，之后先验证main保护再配置认证和单次canary。调度器改为只接受原指定公开仓库，其余限制不变。
 
 - D023（2026-11-12）：P0-D 的目标身份是两枚只安装在本仓库的 GitHub App。planner 与 publisher 各自使用安装令牌，不代表仓库所有者本人，也不把显示名当作身份。可选路线最多一个免费机器账号：由用户本人注册、接受当前条款、只用于跑机器。不用 classic personal access token 回避 fine-grained token 在协作者场景的限制。双身份尚未实现，试点保持 `enabled=false`、`canary_issue=4`。今后进入本公开仓库的提交使用 GitHub noreply 地址；不改写已有历史。安全配置只核验或开启免费告警，不购买、不自动合并、不自动打开依赖更新 PR。平台开关、App 和密钥由用户本人处理；文档不把未读到的开关写成已完成。
+
+- D024（2026-11-12）：P1a 的队列只保证同一台机器上的互斥。本地 flock 加 SQLite `BEGIN IMMEDIATE` 不能当作多机分布式锁。租约默认 120 秒，心跳默认 30 秒；过期租约进入 `interrupted` 供人工复查，不自动再次启动模型，也不退回已预留的尝试。fencing token 只增不减；过期或失配的持有者不能发布。未知状态按 `blocked` 失败关闭。新表只用版本化迁移，显式 `migrate_up` / `migrate_down` 不改、不删、不重排已有 `runs` 行，且拒绝名为 `state.db` 的文件。调度器不自动迁移。`task_queue.enabled` 不是精确的 true 时，行为与现在的 `runs` 预留相同。`enabled` 仍为 false，`canary_issue` 仍为 4。POST 对账、launchd 样例和审计导出不在本决定里。

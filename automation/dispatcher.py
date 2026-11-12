@@ -318,12 +318,12 @@ def clean_env(home, tmp):
             'PYTHONDONTWRITEBYTECODE': '1', 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': '/dev/null'}
 
 
-def child(args, checkout, timeout, log, env, remote_stop=None):
+def child(args, checkout, timeout, log, env, remote_stop=None, heartbeat=None):
     if stopped():
         raise Blocked('STOP switch active')
     with log.open('wb') as stream:
         def body(process):
-            start = last_remote = time.monotonic()
+            start = last_remote = last_beat = time.monotonic()
             while process.poll() is None:
                 if stopped() or time.monotonic()-start > timeout or log.stat().st_size > 2_000_000:
                     raise Blocked('Worker stopped, timed out or exceeded log limit')
@@ -331,6 +331,10 @@ def child(args, checkout, timeout, log, env, remote_stop=None):
                     last_remote = time.monotonic()
                     if remote_stop():
                         raise Blocked('Remote stop label or ready removal')
+                # heartbeat is (interval_seconds, fn) or None. Unset means the loop is unchanged.
+                if heartbeat is not None and time.monotonic()-last_beat >= heartbeat[0]:
+                    last_beat = time.monotonic()
+                    heartbeat[1]()
                 time.sleep(.25)
             if process.returncode:
                 raise Blocked(f'Subprocess failed ({process.returncode}); local log: {log.name}')
@@ -399,6 +403,91 @@ def reserve(db, number, trigger, config):
     cursor = db.execute('INSERT INTO runs(issue,trigger,status,started,day) VALUES(?,?,?,?,?)', (number, trigger, 'running', time.time(), today))
     db.commit()  # Durable reservation BEFORE snapshot/model/network side effects.
     return cursor.lastrowid, attempt
+
+
+def _queue_spec(config):
+    spec = config.get('task_queue') if isinstance(config, dict) else None
+    if not isinstance(spec, dict) or spec.get('enabled') is not True:
+        return None
+    return spec
+
+
+def _queue_seconds(spec, key, default):
+    if key not in spec:
+        return default
+    value = spec[key]
+    if type(value) is not int or not 1 <= value <= 1200:
+        raise ValueError
+    return value
+
+
+def _queue_prepare(config, db, number, trigger):
+    """Commit a queue attempt before the legacy reserve returns to the model.
+
+    No migration is run. A missing file, a bad schema, or a file named state.db
+    fails closed. The unconfigured path returns before any queue import.
+    """
+    spec = _queue_spec(config)
+    if spec is None:
+        return None
+    import automation.task_queue as task_queue
+    try:
+        lease = _queue_seconds(spec, 'lease_seconds', 120)
+        beat = _queue_seconds(spec, 'heartbeat_seconds', 30)
+        if beat >= lease:
+            raise ValueError
+        database = spec['database']
+        if type(database) is not str or not database or os.path.basename(database) == 'state.db':
+            raise ValueError
+        lock = spec.get('lock')
+        day = dt.datetime.now(dt.timezone.utc).date().isoformat()
+        prior = db.execute('SELECT count(*) FROM runs WHERE issue=?', (number,)).fetchone()[0]
+        daily = db.execute('SELECT count(*) FROM runs WHERE day=?', (day,)).fetchone()[0]
+        auth = spec['authorization_version'] if 'authorization_version' in spec else str(trigger)
+        if type(auth) is not str or not auth:
+            raise ValueError
+        queue = task_queue.Queue(database, lock_path=lock if type(lock) is str else None,
+            lease_ms=lease * 1000, heartbeat_ms=beat * 1000)
+        queue.reconcile()  # Expired leases become interrupted. This does not claim or start a model.
+        return queue.activate(repo=REPO, issue=number, authorization_version=auth, trigger=str(trigger),
+            day=day, max_attempts=config['max_attempts_per_issue'], max_daily=config['max_runs_per_day'],
+            prior_attempts=prior, prior_daily=daily)
+    except (task_queue.QueueError, KeyError, TypeError, ValueError, sqlite3.Error, OSError):
+        raise Blocked('Task queue failed closed') from None
+
+
+def _queue_stage(hold, state):
+    if hold is None:
+        return
+    import automation.task_queue as task_queue
+    try:
+        hold.advance(state)
+    except task_queue.QueueError:
+        raise Blocked('Task queue rejected the stage') from None
+
+
+def _queue_heartbeat(hold):
+    if hold is None:
+        return None
+    import automation.task_queue as task_queue
+    def beat():
+        try:
+            hold.heartbeat()
+        except task_queue.QueueError:
+            raise Blocked('Task queue rejected the heartbeat') from None
+    return (hold.heartbeat_seconds, beat)
+
+
+def _queue_note(db, rowid, number, attempt, url, hold):
+    if hold is not None:
+        import automation.task_queue as task_queue
+        try:
+            hold.assert_live()
+        except task_queue.QueueError:
+            raise Blocked('Task queue rejected publication') from None
+    note_publication(db, rowid, number, attempt, url)
+    if hold is not None:
+        _queue_stage(hold, 'feedback_pending')
 
 
 def profile():
@@ -492,7 +581,26 @@ def run_issue(api, issue, config, db):
     actor_gate(api.api('GET', f'/issues/{number}'), api.pages(f'/issues/{number}/events'), config['allowed_actors'])
     if stopped() or global_stop(api):
         raise Blocked('Global STOP active')
-    rowid, attempt = reserve(db, number, trigger, config)
+    hold = _queue_prepare(config, db, number, trigger)
+    if hold is None:
+        rowid, attempt = reserve(db, number, trigger, config)
+    else:
+        try:
+            rowid, attempt = reserve(db, number, trigger, config)
+        except Blocked:
+            try:
+                hold.close_as('blocked')
+            except Exception:
+                pass
+            raise
+        if hold.attempt != attempt:
+            try:
+                hold.close_as('blocked')
+            except Exception:
+                pass
+            db.execute('UPDATE runs SET status=?,result=? WHERE id=? AND status!=?', ('blocked', 'queue_attempt_mismatch', rowid, 'pr'))
+            db.commit()
+            raise Blocked('Task queue failed closed')
     api.deadline = time.monotonic()+config.get('total_timeout_seconds', 1200)  # Includes snapshot, model, tests and PR publication.
     run = RUNTIME / 'runs' / f'issue-{number}-attempt-{attempt}'
     checkout = run / 'checkout'
@@ -513,6 +621,7 @@ def run_issue(api, issue, config, db):
             audit('started', issue=number, attempt=attempt, trigger=trigger,
                   task_sha256=hashlib.sha256(json.dumps(task, sort_keys=True).encode()).hexdigest())
             api.feedback(number, f'Task accepted: attempt {attempt}/2. Local isolated SAMPLE checkout; deadline 10 minutes for Codex. No deployment or merge.')
+            _queue_stage(hold, 'snapshot')
             base, tree = api.snapshot(checkout)
             audit('snapshot', issue=number, base=base, tree=tree)
             prepare(checkout)
@@ -524,27 +633,38 @@ def run_issue(api, issue, config, db):
             prompt_path.write_text(json.dumps(task, ensure_ascii=True))
             # Prompt is argv data, never interpolated into a shell command. No shell=True.
             env = clean_env(checkout / '.worker-tmp', checkout / '.worker-tmp')
+            beat = _queue_heartbeat(hold)
+            extra = {} if beat is None else {'heartbeat': beat}
+            _queue_stage(hold, 'model')
             child(['codex', '-a', 'never', 'exec', '--ephemeral', '--ignore-rules', '--json',
                    '-C', str(checkout), '-c', 'forced_login_method="chatgpt"', prompt], checkout,
-                   min(config['timeout_seconds'], max(1, int(api.deadline-time.monotonic()))), run / 'codex.jsonl', env, revoked)
+                   min(config['timeout_seconds'], max(1, int(api.deadline-time.monotonic()))), run / 'codex.jsonl', env, revoked, **extra)
             changes = diff(checkout, task['allowed_paths'])
             policy = json.loads((ROOT / 'automation/test_manifest.json').read_text())
             runner = (ROOT / 'automation/trusted_tests.py').read_text()
+            _queue_stage(hold, 'testing')
             child(sandbox(checkout, [sys.executable, '-c', runner, str(checkout), json.dumps(policy)]), checkout,
-                  min(config['test_timeout_seconds'], max(1, int(api.deadline-time.monotonic()))), run / 'tests.log', env, revoked)
+                  min(config['test_timeout_seconds'], max(1, int(api.deadline-time.monotonic()))), run / 'tests.log', env, revoked, **extra)
             test_log = (run / 'tests.log').read_text(errors='replace')
             verify_test_result(test_log, policy)
             if diff(checkout, task['allowed_paths']) != changes:
                 raise Blocked('Working files changed during tests; review before publication')
             if revoked() or stopped():
                 raise Blocked('Authorization revoked before publication')
+            _queue_stage(hold, 'publishing')
             url = api.publish(number, attempt, base, tree, changes,
-                record=lambda published: note_publication(db, rowid, number, attempt, published))
+                record=lambda published: _queue_note(db, rowid, number, attempt, published, hold))
             api.feedback(number, f'Draft PR: {url}\nFixed unittest suite: PASS. Files: '+', '.join(x[0] for x in changes)+f'\nAttempt {attempt}/2. Manual acceptance required. Raw logs stay local; Goal/Acceptance must be reviewed in PR.')
+            _queue_stage(hold, 'review')
     except Exception as exc:
         # Unknown errors are summarized by type; never publish arbitrary stderr/model output.
         reason = str(exc) if isinstance(exc, (Blocked,TaskStopped)) else type(exc).__name__
         api.guard = None
+        if hold is not None:
+            try:
+                hold.close_as('stopped' if isinstance(exc, TaskStopped) else 'blocked')
+            except Exception:
+                pass
         if isinstance(exc, TaskStopped):audit('task_stopped', issue=number, reason=reason)
         existing = db.execute('SELECT status FROM runs WHERE id=?', (rowid,)).fetchone()[0]
         if existing != 'pr':
