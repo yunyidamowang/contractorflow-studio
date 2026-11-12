@@ -122,4 +122,6 @@ The path stays off unless `publish_reconcile.enabled` and `task_queue.enabled` a
 
 Python 3.12.3: unittest discover 128/128 in 2.748s. Exact manifest runner 128/128 in 2.663s, `CF_TEST_RESULT` success true, count 128. Nineteen new names, none removed or renamed. The new file's baseline hash was added. Other baseline hashes, `original_baseline_files`, and `baseline_tests` are unchanged. `ci.yml` SHA256 remains `4576223a294403ed8e15536941da5d73110c9f157bbf1bc3a008872dce62260d`.
 
-Not in this slice: a launchd sample and an audit hash chain. Not run: macOS, dispatcher once/watch, a live model, a migration against a real ledger, and any write of repository variables, secrets, labels, or branch protection. PR #7 was not updated. Issue #10 was not closed. CI on the final head is recorded in the handoff after the Actions run completes; it is not claimed here before that run exists.
+Not in this slice: a launchd sample and an audit hash chain. Not run: macOS, dispatcher once/watch, a live model, a migration against a real ledger, and any write of repository variables, secrets, labels, or branch protection. PR #7 was not updated. Issue #10 was not closed.
+
+Implementation head `c025fbda7444df54b09d75bd80b2e0ac2f10a317`: Actions run https://github.com/yunyidamowang/contractorflow-studio/actions/runs/43194516350 completed at 2026-11-12T17:47:26+08:00. cf-tests (head), cf-tests (merge), and cf-ci-gate all succeeded. The commit that records this sentence is a later head. Its own Actions result is not claimed until that run finishes.
