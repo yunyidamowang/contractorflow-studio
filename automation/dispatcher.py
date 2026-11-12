@@ -100,7 +100,7 @@ class GitHub:
         if self.deadline is not None and time.monotonic() >= self.deadline:
             raise Blocked('Total task deadline reached')
         # No arbitrary URLs, delete, merge, main ref updates, workflow or admin API.
-        read = r'(?:|/issues(?:\?[^#]*)?|/issues/\d+(?:/(?:comments|events))?(?:\?[^#]*)?|/labels/codex-stop|/git/ref/heads/main|/git/commits/[0-9a-f]{40}|/git/trees/[0-9a-f]{40}(?:\?recursive=1)?|/git/blobs/[0-9a-f]{40}|/pulls\?[^#]*)'
+        read = r'(?:|/issues(?:\?[^#]*)?|/issues/\d+(?:/(?:comments|events))?(?:\?[^#]*)?|/labels/codex-stop|/git/ref/heads/main|/git/ref/heads/codex/issue-\d+-attempt-[12]-[0-9]+|/branches/main|/git/commits/[0-9a-f]{40}|/git/trees/[0-9a-f]{40}(?:\?recursive=1)?|/git/blobs/[0-9a-f]{40}|/pulls\?[^#]*)'
         write = r'(?:/issues/\d+/comments|/git/(?:blobs|trees|commits|refs)|/pulls)'
         if not ((method == 'GET' and re.fullmatch(read, route)) or (method == 'POST' and re.fullmatch(write, route))):
             raise Blocked('GitHub operation outside worker capability')
@@ -421,7 +421,7 @@ def _queue_seconds(spec, key, default):
     return value
 
 
-def _queue_prepare(config, db, number, trigger):
+def _queue_prepare(config, db, number, trigger, breaker=None):
     """Commit a queue attempt before the legacy reserve returns to the model.
 
     No migration is run. A missing file, a bad schema, or a file named state.db
@@ -447,7 +447,7 @@ def _queue_prepare(config, db, number, trigger):
         if type(auth) is not str or not auth:
             raise ValueError
         queue = task_queue.Queue(database, lock_path=lock if type(lock) is str else None,
-            lease_ms=lease * 1000, heartbeat_ms=beat * 1000)
+            lease_ms=lease * 1000, heartbeat_ms=beat * 1000, breaker=breaker)
         queue.reconcile()  # Expired leases become interrupted. This does not claim or start a model.
         return queue.activate(repo=REPO, issue=number, authorization_version=auth, trigger=str(trigger),
             day=day, max_attempts=config['max_attempts_per_issue'], max_daily=config['max_runs_per_day'],
@@ -476,6 +476,269 @@ def _queue_heartbeat(hold):
         except task_queue.QueueError:
             raise Blocked('Task queue rejected the heartbeat') from None
     return (hold.heartbeat_seconds, beat)
+
+
+def _publish_feature(config):
+    spec = config.get('publish_reconcile') if isinstance(config, dict) else None
+    if not isinstance(spec, dict) or spec.get('enabled') is not True:
+        return None
+    return spec
+
+
+def _publish_breaker(config):
+    from automation.publish_reconcile import BreakerError, CircuitBreaker
+    spec = _publish_feature(config)
+    queue = _queue_spec(config)
+    if spec is None or queue is None:
+        raise Blocked('Publish reconcile failed closed')
+    database = queue.get('database')
+    path = spec['breaker'] if 'breaker' in spec else None
+    if path is None:
+        if type(database) is not str or not database:
+            raise Blocked('Publish reconcile failed closed')
+        path = database + '.breaker'
+    if type(path) is not str or not path or os.path.basename(path) == 'state.db':
+        raise Blocked('Publish reconcile failed closed')
+    if type(database) is str and os.path.abspath(path) == os.path.abspath(database):
+        raise Blocked('Publish reconcile failed closed')
+    try:
+        return CircuitBreaker(path)
+    except BreakerError:
+        raise Blocked('Publish reconcile failed closed') from None
+
+
+def _post_once(api, route, data):
+    """One write attempt. GitHub.api does not retry POST. This wrapper does not either."""
+    from automation.publish_reconcile import WriteFailed, classify_blocked
+    try:
+        body = api.api('POST', route, data)
+    except Blocked as exc:
+        raise WriteFailed(classify_blocked(str(exc))) from None
+    if type(body) is not dict:
+        raise WriteFailed('unknown')
+    return body
+
+
+def _logical_get(api, route):
+    """One logical read. Transport retries, if any, stay inside GitHub.api."""
+    from automation.publish_reconcile import transport_view
+    try:
+        body = api.api('GET', route)
+    except Blocked as exc:
+        return transport_view(str(exc))
+    return (200, body)
+
+
+def _read_comments(api, number):
+    try:
+        rows = api.pages(f'/issues/{number}/comments')
+    except Blocked as exc:
+        from automation.publish_reconcile import transport_view
+        return transport_view(str(exc))
+    if type(rows) is not list:
+        return None
+    return (200, rows)
+
+
+def _assert_controls(api, breaker):
+    from automation.publish_reconcile import classify_blocked, observe_controls
+    try:
+        repo = api.api('GET', '')
+        branch = api.api('GET', '/branches/main')
+    except Blocked as exc:
+        kind = classify_blocked(str(exc))
+        breaker.latch('auth' if kind == 'auth' else 'unreconcilable_write')
+        raise Blocked('Publish reconcile failed closed') from None
+    reason = observe_controls(repo, branch)
+    if reason:
+        breaker.latch(reason)
+        raise Blocked('Publish reconcile failed closed')
+
+
+def _freeze_publishing(hold):
+    try:
+        if hold.queue.fetch(hold.task_id)['state'] == 'publishing':
+            hold.mark_publish_unknown()
+    except Exception:
+        return
+
+
+def _reconcile_publish(api, queue, task_id, breaker):
+    from automation.publish_reconcile import decide_publish
+    row = queue.fetch(task_id)
+    if row['state'] != 'publish_unknown':
+        return row['state']
+    branch = row['publish_branch']
+    commit = row['publish_commit']
+    if type(branch) is not str or type(commit) is not str:
+        queue.apply_reconciliation(task_id, 'unknown')
+        return 'unknown'
+    owner = REPO.split('/')[0]
+    ref = _logical_get(api, '/git/ref/heads/' + branch)
+    pulls = _logical_get(api, f'/pulls?head={owner}:{branch}&state=all')
+    commit_view = _logical_get(api, '/git/commits/' + commit)
+    outcome, url = decide_publish(ref, pulls, commit_view, branch, commit)
+    if outcome == 'auth':
+        breaker.latch('auth')
+        queue.apply_reconciliation(task_id, 'unknown')
+        return 'unknown'
+    queue.apply_reconciliation(task_id, outcome, url=url)
+    return outcome
+
+
+def _feedback_once(api, queue, task_id, number, body, breaker):
+    from automation.publish_reconcile import FEEDBACK_MARKER, classify_blocked, marker_present
+    from automation.task_queue import QueueBlocked
+    if breaker.latched():
+        raise Blocked('circuit breaker latched')
+    view = _read_comments(api, number)
+    if view is None or view[0] not in (200, 401, 403):
+        breaker.latch('unreconcilable_write')
+        queue.block_feedback(task_id, 'feedback_unknown')
+        return 'unknown'
+    if view[0] in (401, 403):
+        breaker.latch('auth')
+        queue.block_feedback(task_id, 'feedback_unknown')
+        return 'unknown'
+    present = marker_present(view[1], FEEDBACK_MARKER)
+    if present is None:
+        breaker.latch('unreconcilable_write')
+        queue.block_feedback(task_id, 'feedback_unknown')
+        return 'unknown'
+    if present:
+        queue.complete_feedback(task_id)
+        return 'present'
+    try:
+        queue.begin_feedback_post(task_id)
+    except QueueBlocked as exc:
+        if 'cap' in str(exc):
+            queue.block_feedback(task_id, 'feedback_capped')
+            return 'capped'
+        raise
+    try:
+        api.feedback(number, body)
+    except Blocked as exc:
+        if classify_blocked(str(exc)) == 'auth':
+            breaker.latch('auth')
+            queue.block_feedback(task_id, 'feedback_unknown')
+            return 'unknown'
+        return 'unconfirmed'
+    queue.complete_feedback(task_id)
+    return 'sent'
+
+
+def _deliver_feedback(api, queue, task_id, files, breaker):
+    from automation.publish_reconcile import feedback_body
+    if breaker.latched():
+        raise Blocked('circuit breaker latched')
+    row = queue.fetch(task_id)
+    if row['state'] != 'feedback_pending':
+        return
+    body = feedback_body(row['published_url'], files, row['attempt'])
+    result = _feedback_once(api, queue, task_id, row['issue'], body, breaker)
+    if result == 'unconfirmed':
+        result = _feedback_once(api, queue, task_id, row['issue'], body, breaker)
+    if result in ('present', 'sent'):
+        return
+    raise Blocked('feedback result unknown')
+
+
+def _enabled_publication(api, hold, breaker, db, rowid, number, attempt, base, tree, changes):
+    from automation.publish_reconcile import WriteFailed, publish_draft
+    branch = f'codex/issue-{number}-attempt-{attempt}-{time.time_ns()}'
+    files = [item[0] for item in changes]
+    posted = False
+    mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGALRM})
+    try:
+        try:
+            url, _commit = publish_draft(
+                lambda route, data: _post_once(api, route, data),
+                lambda name, sha: hold.note_publish_target(name, sha),
+                number, attempt, base, tree, changes, branch)
+
+            def remember():
+                note_publication(db, rowid, number, attempt, url)
+                return url
+
+            hold.publish(remember)
+            posted = True
+        except WriteFailed as exc:
+            if exc.kind == 'auth':
+                breaker.latch('auth')
+        except TaskStopped:
+            raise
+        except Exception:
+            breaker.latch('unreconcilable_write')
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, mask)
+    if posted:
+        _deliver_feedback(api, hold.queue, hold.task_id, files, breaker)
+        return
+    _freeze_publishing(hold)
+    outcome = 'unknown'
+    try:
+        if hold.queue.fetch(hold.task_id)['state'] == 'publish_unknown':
+            outcome = _reconcile_publish(api, hold.queue, hold.task_id, breaker)
+    except Exception:
+        breaker.latch('unreconcilable_write')
+        raise Blocked('publish result unknown') from None
+    if outcome == 'exists' and not breaker.latched():
+        url = hold.queue.fetch(hold.task_id)['published_url']
+        status = db.execute('SELECT status FROM runs WHERE id=?', (rowid,)).fetchone()[0]
+        if status != 'pr':
+            note_publication(db, rowid, number, attempt, url)
+        _deliver_feedback(api, hold.queue, hold.task_id, files, breaker)
+        return
+    raise Blocked('publish result unknown')
+
+
+def recover_open(api, config):
+    """Read unknown publishes and post at most one capped feedback. No model."""
+    if _publish_feature(config) is None:
+        return
+    try:
+        _recover_open(api, config)
+    except Blocked as exc:
+        exc.reported = True
+        raise
+
+
+def _recover_open(api, config):
+    import automation.task_queue as task_queue
+    spec = _queue_spec(config)
+    if spec is None:
+        raise Blocked('Publish reconcile failed closed')
+    breaker = _publish_breaker(config)
+    if breaker.latched():
+        return
+    database = spec.get('database')
+    if type(database) is not str or not database or os.path.basename(database) == 'state.db':
+        raise Blocked('Publish reconcile failed closed')
+    lease = _queue_seconds(spec, 'lease_seconds', 120)
+    beat = _queue_seconds(spec, 'heartbeat_seconds', 30)
+    if beat >= lease:
+        raise Blocked('Publish reconcile failed closed')
+    lock = spec.get('lock')
+    try:
+        queue = task_queue.Queue(database, lock_path=lock if type(lock) is str else None,
+            lease_ms=lease * 1000, heartbeat_ms=beat * 1000, breaker=breaker)
+        queue.reconcile()
+    except task_queue.QueueError:
+        raise Blocked('Publish reconcile failed closed') from None
+    if breaker.latched():
+        return
+    for row in queue.snapshot_rows():
+        if breaker.latched():
+            return
+        try:
+            if row['state'] == 'publish_unknown':
+                outcome = _reconcile_publish(api, queue, row['id'], breaker)
+                if outcome == 'exists' and not breaker.latched():
+                    _deliver_feedback(api, queue, row['id'], (), breaker)
+            elif row['state'] == 'feedback_pending':
+                _deliver_feedback(api, queue, row['id'], (), breaker)
+        except task_queue.QueueError:
+            raise Blocked('Publish reconcile failed closed') from None
 
 
 def _queue_note(db, rowid, number, attempt, url, hold):
@@ -581,7 +844,28 @@ def run_issue(api, issue, config, db):
     actor_gate(api.api('GET', f'/issues/{number}'), api.pages(f'/issues/{number}/events'), config['allowed_actors'])
     if stopped() or global_stop(api):
         raise Blocked('Global STOP active')
-    hold = _queue_prepare(config, db, number, trigger)
+    feature = _publish_feature(config)
+    breaker = None
+    if feature is not None:
+        if _queue_spec(config) is None:
+            error = Blocked('Publish reconcile failed closed')
+            error.reported = True
+            raise error
+        breaker = _publish_breaker(config)
+        try:
+            breaker.assert_closed()
+        except Exception:
+            error = Blocked('circuit breaker latched')
+            error.reported = True
+            raise error from None
+    try:
+        hold = _queue_prepare(config, db, number, trigger, breaker)
+    except Blocked as exc:
+        if breaker is not None and breaker.latched():
+            error = Blocked('circuit breaker latched')
+            error.reported = True
+            raise error from None
+        raise exc
     if hold is None:
         rowid, attempt = reserve(db, number, trigger, config)
     else:
@@ -617,6 +901,8 @@ def run_issue(api, issue, config, db):
     api.guard = guard
     try:
         with guard:
+            if breaker is not None:
+                _assert_controls(api, breaker)
             checkout.mkdir(parents=True)
             audit('started', issue=number, attempt=attempt, trigger=trigger,
                   task_sha256=hashlib.sha256(json.dumps(task, sort_keys=True).encode()).hexdigest())
@@ -646,35 +932,61 @@ def run_issue(api, issue, config, db):
             child(sandbox(checkout, [sys.executable, '-c', runner, str(checkout), json.dumps(policy)]), checkout,
                   min(config['test_timeout_seconds'], max(1, int(api.deadline-time.monotonic()))), run / 'tests.log', env, revoked, **extra)
             test_log = (run / 'tests.log').read_text(errors='replace')
-            verify_test_result(test_log, policy)
+            try:
+                verify_test_result(test_log, policy)
+            except Blocked:
+                if breaker is not None:
+                    breaker.latch('safety_test')
+                raise
             if diff(checkout, task['allowed_paths']) != changes:
                 raise Blocked('Working files changed during tests; review before publication')
             if revoked() or stopped():
                 raise Blocked('Authorization revoked before publication')
             _queue_stage(hold, 'publishing')
-            url = api.publish(number, attempt, base, tree, changes,
-                record=lambda published: _queue_note(db, rowid, number, attempt, published, hold))
-            api.feedback(number, f'Draft PR: {url}\nFixed unittest suite: PASS. Files: '+', '.join(x[0] for x in changes)+f'\nAttempt {attempt}/2. Manual acceptance required. Raw logs stay local; Goal/Acceptance must be reviewed in PR.')
-            _queue_stage(hold, 'review')
+            if breaker is not None:
+                _assert_controls(api, breaker)
+                _enabled_publication(api, hold, breaker, db, rowid, number, attempt, base, tree, changes)
+            else:
+                url = api.publish(number, attempt, base, tree, changes,
+                    record=lambda published: _queue_note(db, rowid, number, attempt, published, hold))
+                api.feedback(number, f'Draft PR: {url}\nFixed unittest suite: PASS. Files: '+', '.join(x[0] for x in changes)+f'\nAttempt {attempt}/2. Manual acceptance required. Raw logs stay local; Goal/Acceptance must be reviewed in PR.')
+                _queue_stage(hold, 'review')
     except Exception as exc:
         # Unknown errors are summarized by type; never publish arbitrary stderr/model output.
         reason = str(exc) if isinstance(exc, (Blocked,TaskStopped)) else type(exc).__name__
         api.guard = None
+        suppress_feedback = False
         if hold is not None:
             try:
                 hold.close_as('stopped' if isinstance(exc, TaskStopped) else 'blocked')
             except Exception:
-                pass
+                suppress_feedback = True
+            if breaker is not None:
+                try:
+                    quiet = hold.queue.fetch(hold.task_id)
+                except Exception:
+                    quiet = {'state': 'blocked', 'result': 'publish_unreconciled'}
+                    suppress_feedback = True
+                if quiet['state'] in ('publish_unknown', 'feedback_pending', 'review'):
+                    suppress_feedback = True
+                if quiet.get('result') in ('publish_absent', 'publish_partial', 'publish_unreconciled',
+                                            'publish_unknown', 'feedback_capped', 'feedback_unknown'):
+                    suppress_feedback = True
+                if breaker.latched():
+                    suppress_feedback = True
+        if breaker is not None and str(exc).startswith('GitHub '):
+            suppress_feedback = True
         if isinstance(exc, TaskStopped):audit('task_stopped', issue=number, reason=reason)
         existing = db.execute('SELECT status FROM runs WHERE id=?', (rowid,)).fetchone()[0]
         if existing != 'pr':
             db.execute('UPDATE runs SET status=?,result=? WHERE id=?', ('blocked', reason, rowid));db.commit()
         audit('needs_attention', issue=number, attempt=attempt, reason=reason)
         api.deadline = None  # Permit bounded failure notification after task expiry.
-        try:
-            api.feedback(number, f'Needs attention: {reason}. Attempt {attempt}/2. No auto retry after this blocker; resolve it and remove/re-add codex-ready. PR may already exist if feedback failed; check PR list before retrying.')
-        except Exception:
-            audit('feedback_failed', issue=number, attempt=attempt)
+        if not suppress_feedback:
+            try:
+                api.feedback(number, f'Needs attention: {reason}. Attempt {attempt}/2. No auto retry after this blocker; resolve it and remove/re-add codex-ready. PR may already exist if feedback failed; check PR list before retrying.')
+            except Exception:
+                audit('feedback_failed', issue=number, attempt=attempt)
         error = Blocked(reason)
         error.reported = True
         raise error from None
@@ -709,6 +1021,7 @@ def once():
             if stopped() or global_stop(api):
                 audit('global_stop', action='no_github_write')
                 return
+            recover_open(api, config)
             issues = api.pages('/issues?state=open&labels=codex-ready&sort=created&direction=asc')
             for issue in issues:
                 if config['canary_issue'] is not None and issue['number'] != config['canary_issue']:

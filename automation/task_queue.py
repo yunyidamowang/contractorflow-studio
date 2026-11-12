@@ -3,15 +3,22 @@
 Two processes on one machine are excluded by a local flock plus a SQLite
 BEGIN IMMEDIATE transaction. A second machine, a copied database, or a
 clock we cannot trust is fail-closed. An expired lease is interrupted for
-review; it is not a second model run. Attempt rows are not deleted or
+review; it is not a second model run. publish_unknown is the exception:
+an expired publishing row that already recorded a branch becomes
+publish_unknown so a later read can identify it. That transition does not
+start a model and does not delete the row. Attempt rows are not deleted or
 refunded. This module does not migrate a database unless migrate_up or
 migrate_down is called, and it refuses a file named state.db.
+
+A breaker object, when attached, is latched on duplicate claim and ledger
+corruption. This module never clears that breaker.
 """
 import fcntl
 import hashlib
 import hmac
 import os
 from pathlib import Path
+import re
 import secrets
 import sqlite3
 import time
@@ -19,9 +26,14 @@ import time
 
 STATES = frozenset({
     'queued', 'claimed', 'snapshot', 'model', 'testing', 'publishing',
-    'feedback_pending', 'review', 'blocked', 'stopped', 'interrupted',
+    'publish_unknown', 'feedback_pending', 'review', 'blocked', 'stopped',
+    'interrupted',
 })
 TERMINAL = frozenset({'review', 'blocked', 'stopped', 'interrupted'})
+_FEEDBACK_CAP = 2
+_FEEDBACK_WINDOW_MS = 86_400_000
+_BRANCH = re.compile(r'codex/issue-\d+-attempt-[12]-[0-9]+\Z')
+_SHA = re.compile(r'[0-9a-f]{40}\Z')
 # feedback_pending stays put on a normal failure so a later slice can retry
 # the comment without starting the model again. Lease expiry still interrupts it.
 HOLDABLE = frozenset({
@@ -39,6 +51,7 @@ VISIBLE = (
     'id', 'repo', 'issue', 'authorization_version', 'trigger_key', 'state',
     'attempt', 'fencing_token', 'lease_until', 'reserved_at', 'heartbeat_at',
     'day', 'model_started', 'published_url', 'result',
+    'publish_branch', 'publish_commit', 'feedback_posts',
 )
 _HEADER = b'SQLite format 3\x00'
 _UP = (
@@ -64,6 +77,10 @@ _UP = (
         model_started INTEGER NOT NULL,
         published_url TEXT,
         result TEXT,
+        publish_branch TEXT,
+        publish_commit TEXT,
+        feedback_posts INTEGER NOT NULL DEFAULT 0,
+        feedback_at INTEGER,
         UNIQUE (repo, issue, authorization_version, trigger_key)
     )''',
     '''CREATE TABLE cf_queue_audit_v1 (
@@ -169,6 +186,36 @@ class Hold:
             conn.execute('UPDATE cf_task_queue_v1 SET published_url=? WHERE id=? AND fencing_token=?', (value, row['id'], self.token))
             return value
 
+    def note_publish_target(self, branch, commit, now=None):
+        """Record the branch and commit before the branch POST. Token stays put."""
+        now = self.queue._now(now)
+        with self.queue._exclusive() as conn:
+            row = self._require_live(conn, now, frozenset({'publishing'}))
+            if not _known_branch(branch) or not branch.startswith(f"codex/issue-{row['issue']}-attempt-{row['attempt']}-"):
+                raise QueueBlocked('invalid publish target')
+            if type(commit) is not str or not _SHA.fullmatch(commit):
+                raise QueueBlocked('invalid publish target')
+            conn.execute(
+                '''UPDATE cf_task_queue_v1 SET publish_branch=?, publish_commit=?
+                   WHERE id=? AND fencing_token=? AND state='publishing' ''',
+                (branch, commit, row['id'], self.token))
+            current = conn.execute(
+                'SELECT publish_branch, publish_commit, fencing_token, state FROM cf_task_queue_v1 WHERE id=?',
+                (row['id'],)).fetchone()
+            if (current is None or current['publish_branch'] != branch or current['publish_commit'] != commit
+                    or current['fencing_token'] != self.token or current['state'] != 'publishing'):
+                raise QueueFenced('fencing token rejected')
+            self.queue._audit(conn, row['id'], 'publish_target', 'publishing', self.token, now, 'target_recorded')
+        return self
+
+    def mark_publish_unknown(self, now=None):
+        """Stop writes for this holder. The branch already stored is kept."""
+        now = self.queue._now(now)
+        with self.queue._exclusive() as conn:
+            row = self._require_live(conn, now, frozenset({'publishing'}))
+            self.queue._enter_unknown(conn, row, now)
+        return self
+
     def close_as(self, state, now=None):
         if state not in ('blocked', 'stopped'):
             raise QueueBlocked('close state rejected')
@@ -176,10 +223,14 @@ class Hold:
         with self.queue._exclusive() as conn:
             row = self._row(conn)
             # feedback_pending means the publish was recorded. Do not turn that into a rerunnable failure.
+            # A recorded branch is publish_unknown, not a silent blocked row that could be retried.
             if row['state'] not in {'claimed', 'snapshot', 'model', 'testing', 'publishing'} or not self._matches(row):
                 return self
             if type(row['reserved_at']) is not int or now < row['reserved_at']:
                 self.queue._terminal(conn, row, 'blocked', now, 'clock moved backwards')
+                return self
+            if row['state'] == 'publishing' and _known_branch(row['publish_branch']):
+                self.queue._enter_unknown(conn, row, now)
                 return self
             self.queue._terminal(conn, row, state, now, 'closed')
         return self
@@ -217,8 +268,9 @@ class Hold:
 
 
 class Queue:
-    def __init__(self, database, *, lock_path=None, lease_ms=120_000, heartbeat_ms=30_000, clock=None):
+    def __init__(self, database, *, lock_path=None, lease_ms=120_000, heartbeat_ms=30_000, clock=None, breaker=None):
         self.database = Path(database)
+        self.breaker = breaker
         if self.database.name == 'state.db' or self.database.is_symlink():
             raise QueueBlocked('queue database must not be the legacy ledger')
         if (type(lease_ms) is not int or type(heartbeat_ms) is not int
@@ -255,6 +307,7 @@ class Queue:
                 raise
             except sqlite3.Error:
                 conn.rollback()
+                self._latch('ledger')
                 raise QueueBlocked('queue database corrupt') from None
         finally:
             if conn is not None:
@@ -282,6 +335,7 @@ class Queue:
                 raise
             except sqlite3.Error:
                 conn.rollback()
+                self._latch('ledger')
                 raise QueueBlocked('queue database corrupt') from None
         finally:
             if conn is not None:
@@ -291,11 +345,13 @@ class Queue:
     def enqueue(self, *, repo, issue, authorization_version, trigger, day, max_attempts, max_daily,
                 prior_attempts=0, prior_daily=0, now=None):
         """Persist a queued attempt. Does not claim it and does not start a model."""
+        self._breaker_check()
         key = self._key(repo, issue, authorization_version, trigger, day, max_attempts, max_daily, prior_attempts, prior_daily)
         now = self._now(now)
         with self._exclusive() as conn:
+            self._breaker_check()
             if _by_key(conn, key) is not None:
-                raise QueueBlocked('duplicate claim')
+                self._duplicate()
             attempt = _next_attempt(conn, key)
             conn.execute(
                 '''INSERT INTO cf_task_queue_v1 (
@@ -310,12 +366,14 @@ class Queue:
             return task_id
 
     def claim(self, *, repo, issue, authorization_version, trigger, now=None):
+        self._breaker_check()
         key = self._identity(repo, issue, authorization_version, trigger)
         now = self._now(now)
         with self._exclusive() as conn:
+            self._breaker_check()
             row = _by_key(conn, key)
             if row is None or row['state'] != 'queued' or row['owner_hash'] is not None:
-                raise QueueBlocked('duplicate claim')
+                self._duplicate()
             if type(row['reserved_at']) is not int or now < row['reserved_at']:
                 self._terminal(conn, row, 'blocked', now, 'clock moved backwards')
                 raise _CommitAndRaise(QueueBlocked('clock moved backwards'))
@@ -331,11 +389,13 @@ class Queue:
         An existing key is refused. This does not adopt a row left by a dead
         process, so a restart cannot continue that attempt.
         """
+        self._breaker_check()
         key = self._key(repo, issue, authorization_version, trigger, day, max_attempts, max_daily, prior_attempts, prior_daily)
         now = self._now(now)
         with self._exclusive() as conn:
+            self._breaker_check()
             if _by_key(conn, key) is not None:
-                raise QueueBlocked('duplicate claim')
+                self._duplicate()
             attempt = _next_attempt(conn, key)
             owner = secrets.token_hex(16)
             token = 1
@@ -359,11 +419,15 @@ class Queue:
                 if row['state'] not in STATES:
                     self._terminal(conn, row, 'blocked', now, 'unknown_state', event='unknown_state')
                     continue
-                if row['state'] in TERMINAL:
+                if row['state'] in TERMINAL or row['state'] == 'publish_unknown':
                     continue
                 if type(row['reserved_at']) is not int or now < row['reserved_at']:
                     self._terminal(conn, row, 'blocked', now, 'clock moved backwards')
                     raise _CommitAndRaise(QueueBlocked('clock moved backwards'))
+                if (row['state'] == 'publishing' and _known_branch(row['publish_branch'])
+                        and (type(row['lease_until']) is not int or now >= row['lease_until'])):
+                    self._enter_unknown(conn, row, now)
+                    continue
                 if type(row['lease_until']) is not int or now >= row['lease_until']:
                     self._terminal(conn, row, 'interrupted', now, 'lease expired', event='interrupted')
 
@@ -389,6 +453,87 @@ class Queue:
             return [
                 (row['id'], row['task_id'], row['event'], row['state'], row['fencing_token'], row['at_ms'], row['detail'])
                 for row in rows]
+
+    def snapshot_rows(self):
+        with self._exclusive() as conn:
+            columns = ', '.join(VISIBLE)
+            rows = conn.execute(f'SELECT {columns} FROM cf_task_queue_v1 ORDER BY id').fetchall()
+            return [{key: row[key] for key in VISIBLE} for row in rows]
+
+    def apply_reconciliation(self, task_id, outcome, url=None, now=None):
+        """Record a read-only decision. Does not start a model or create a remote object."""
+        if outcome not in ('exists', 'absent', 'partial', 'unknown'):
+            raise QueueBlocked('invalid reconciliation')
+        now = self._now(now)
+        with self._exclusive() as conn:
+            row = self._task(conn, task_id)
+            if row['state'] != 'publish_unknown':
+                raise QueueBlocked('illegal transition')
+            if outcome == 'exists':
+                if not _safe_url(url):
+                    self._latch('unreconcilable_write')
+                    self._move_frozen(conn, row, 'blocked', now, 'publish_unreconciled')
+                    return
+                self._move_frozen(conn, row, 'feedback_pending', now, 'publish_exists', url=url)
+                return
+            if outcome == 'unknown':
+                self._latch('unreconcilable_write')
+                self._move_frozen(conn, row, 'blocked', now, 'publish_unreconciled')
+                return
+            detail = 'publish_absent' if outcome == 'absent' else 'publish_partial'
+            self._move_frozen(conn, row, 'blocked', now, detail)
+
+    def begin_feedback_post(self, task_id, now=None):
+        """Count one feedback POST before it is sent. The count is not cleared."""
+        self._breaker_check()
+        now = self._now(now)
+        with self._exclusive() as conn:
+            self._breaker_check()
+            row = self._task(conn, task_id)
+            if row['state'] != 'feedback_pending' or row['model_started'] != 1 or not row['published_url']:
+                raise QueueBlocked('illegal transition')
+            posts = row['feedback_posts']
+            if type(posts) is not int or not 0 <= posts <= _FEEDBACK_CAP:
+                self._latch('ledger')
+                raise _CommitAndRaise(QueueBlocked('queue database corrupt'))
+            if posts >= _FEEDBACK_CAP:
+                raise QueueBlocked('feedback cap reached')
+            started = row['feedback_at']
+            if started is not None:
+                if type(started) is not int or now < started:
+                    self._terminal(conn, row, 'blocked', now, 'clock moved backwards')
+                    raise _CommitAndRaise(QueueBlocked('clock moved backwards'))
+                if now - started > _FEEDBACK_WINDOW_MS:
+                    raise QueueBlocked('feedback cap reached')
+            at = started if type(started) is int else now
+            cur = conn.execute(
+                '''UPDATE cf_task_queue_v1 SET feedback_posts=?, feedback_at=?
+                   WHERE id=? AND state='feedback_pending' AND feedback_posts=?''',
+                (posts + 1, at, row['id'], posts))
+            if cur.rowcount != 1:
+                raise QueueFenced('fencing token rejected')
+            self._audit(conn, row['id'], 'feedback_attempt', 'feedback_pending', row['fencing_token'], now, 'feedback_post')
+            return posts + 1
+
+    def complete_feedback(self, task_id, now=None):
+        self._breaker_check()
+        now = self._now(now)
+        with self._exclusive() as conn:
+            self._breaker_check()
+            row = self._task(conn, task_id)
+            if row['state'] != 'feedback_pending' or row['model_started'] != 1:
+                raise QueueBlocked('illegal transition')
+            self._move_frozen(conn, row, 'review', now, 'feedback_recorded')
+
+    def block_feedback(self, task_id, detail, now=None):
+        if detail not in ('feedback_capped', 'feedback_unknown'):
+            raise QueueBlocked('close state rejected')
+        now = self._now(now)
+        with self._exclusive() as conn:
+            row = self._task(conn, task_id)
+            if row['state'] != 'feedback_pending':
+                raise QueueBlocked('illegal transition')
+            self._move_frozen(conn, row, 'blocked', now, detail)
 
     def _grant(self, conn, row, now, event, detail):
         owner = secrets.token_hex(16)
@@ -477,6 +622,69 @@ class Queue:
     def _exclusive(self):
         return _Exclusive(self)
 
+    def _latch(self, reason):
+        breaker = self.breaker
+        if breaker is None:
+            return
+        try:
+            breaker.latch(reason)
+        except Exception:
+            return
+
+    def _breaker_check(self):
+        if self.breaker is None:
+            return
+        try:
+            self.breaker.assert_closed()
+        except Exception:
+            raise QueueBlocked('circuit breaker latched') from None
+
+    def _duplicate(self):
+        self._latch('duplicate_claim')
+        raise QueueBlocked('duplicate claim')
+
+    def _task(self, conn, task_id):
+        if type(task_id) is not int or task_id < 1:
+            raise QueueBlocked('missing task')
+        row = conn.execute('SELECT * FROM cf_task_queue_v1 WHERE id=?', (task_id,)).fetchone()
+        if row is None:
+            raise QueueBlocked('missing task')
+        return row
+
+    def _enter_unknown(self, conn, row, now):
+        if row['state'] != 'publishing':
+            raise QueueBlocked('illegal transition')
+        self._move_frozen(conn, row, 'publish_unknown', now, 'publish_unknown')
+
+    def _move_frozen(self, conn, row, state, now, detail, url=None):
+        if state not in ('publish_unknown', 'feedback_pending', 'blocked', 'review'):
+            raise QueueBlocked('illegal transition')
+        previous = row['fencing_token']
+        if type(previous) is not int or previous < 0:
+            raise QueueBlocked('fencing token rejected')
+        token = previous + 1
+        if url is None:
+            conn.execute(
+                '''UPDATE cf_task_queue_v1
+                   SET state=?, fencing_token=?, owner_hash=NULL, result=?
+                   WHERE id=? AND fencing_token=?''',
+                (state, token, detail, row['id'], previous))
+        else:
+            conn.execute(
+                '''UPDATE cf_task_queue_v1
+                   SET state=?, fencing_token=?, owner_hash=NULL, result=?, published_url=?
+                   WHERE id=? AND fencing_token=?''',
+                (state, token, detail, url, row['id'], previous))
+        current = conn.execute(
+            'SELECT state, fencing_token, model_started, attempt, published_url FROM cf_task_queue_v1 WHERE id=?',
+            (row['id'],)).fetchone()
+        if (current is None or current['state'] != state or current['fencing_token'] != token
+                or current['model_started'] != row['model_started'] or current['attempt'] != row['attempt']):
+            raise QueueBlocked('missing task')
+        if url is not None and current['published_url'] != url:
+            raise QueueBlocked('publish result rejected')
+        self._audit(conn, row['id'], 'reconcile', state, token, now, detail)
+
     def _assert_header(self):
         if self.database.name == 'state.db' or self.database.is_symlink():
             raise QueueBlocked('queue database must not be the legacy ledger')
@@ -486,8 +694,10 @@ class Queue:
             with self.database.open('rb') as handle:
                 header = handle.read(16)
         except OSError:
+            self._latch('ledger')
             raise QueueBlocked('queue database unreadable') from None
         if header != _HEADER:
+            self._latch('ledger')
             raise QueueBlocked('queue database corrupt')
 
     def _read_only_check(self):
@@ -496,18 +706,25 @@ class Queue:
         try:
             ro = sqlite3.connect(uri, uri=True, isolation_level=None)
         except sqlite3.Error:
+            self._latch('ledger')
             raise QueueBlocked('queue database corrupt') from None
         try:
             try:
                 check = ro.execute('PRAGMA integrity_check').fetchone()
                 version = _version(ro)
+            except QueueBlocked:
+                self._latch('ledger')
+                raise
             except sqlite3.Error:
+                self._latch('ledger')
                 raise QueueBlocked('queue database corrupt') from None
         finally:
             ro.close()
         if check is None or check[0] != 'ok':
+            self._latch('ledger')
             raise QueueBlocked('queue database corrupt')
         if version != 1:
+            self._latch('ledger')
             raise QueueBlocked('schema mismatch')
 
     def _open_checked(self):
@@ -515,6 +732,7 @@ class Queue:
         try:
             conn = sqlite3.connect(self.database, isolation_level=None, timeout=5)
         except sqlite3.Error:
+            self._latch('ledger')
             raise QueueBlocked('queue database corrupt') from None
         conn.row_factory = sqlite3.Row
         try:
@@ -597,6 +815,15 @@ class _Exclusive:
             self.fd = None
 
 
+def _known_branch(value):
+    return type(value) is str and _BRANCH.fullmatch(value) is not None
+
+
+def _safe_url(url):
+    return (type(url) is str and url.startswith('https://') and len(url) <= 500
+            and not any(char in url for char in '\n\r\x00 @'))
+
+
 def _hash(owner):
     return hashlib.sha256(owner.encode()).hexdigest()
 
@@ -620,6 +847,13 @@ def _version(conn):
     except sqlite3.Error:
         raise QueueBlocked('schema mismatch') from None
     if versions == [1] and {'cf_task_queue_v1', 'cf_queue_audit_v1'} <= names:
+        try:
+            columns = {row[1] for row in conn.execute('PRAGMA table_info(cf_task_queue_v1)')}
+        except sqlite3.Error:
+            raise QueueBlocked('schema mismatch') from None
+        required = {'publish_branch', 'publish_commit', 'feedback_posts', 'feedback_at'}
+        if not required <= columns:
+            raise QueueBlocked('schema mismatch')
         return 1
     raise QueueBlocked('schema mismatch')
 
