@@ -49,7 +49,8 @@
     "tests/test_trusted_tests.py": "ef1be3ece8ace6fd1379e1cc857b581a8a3537b6ef0f0e40a5e5e041533be31b",
     "tests/test_test_policy_negative.py": "eb470c1d36f4189212c329e28df7869d8ae56c9bf36078cd44f4a6f196c142ff",
     "tests/test_task_guard.py": "101a553ae0a9c33b8210f97d87a19d4ea4d9205c3c8ecf95ca63f4ea0f59f829",
-    "tests/test_public_hygiene.py": "3b0dc21db98c20e6f1d8bb9101823480b6ce98db3da71f9fceb6ef28486de188"
+    "tests/test_public_hygiene.py": "3b0dc21db98c20e6f1d8bb9101823480b6ce98db3da71f9fceb6ef28486de188",
+    "tests/test_task_queue.py": "8af0f46e855a88ee658811d45aae16c008645438ed8f8a42d0cbf42bb36643ab"
   },
   "tests": [
     "test_automation.AutomationTest.test_broker_cannot_merge_delete_or_write_main",
@@ -144,7 +145,23 @@
     "test_trusted_tests.TrustedTests.test_empty_collection_rejected",
     "test_trusted_tests.TrustedTests.test_names_and_failure_result",
     "test_public_hygiene.PublicHygieneTests.test_tracked_text_has_no_disallowed_email",
-    "test_public_hygiene.PublicHygieneTests.test_p0d_docs_and_disabled_settings"
+    "test_public_hygiene.PublicHygieneTests.test_p0d_docs_and_disabled_settings",
+    "test_task_queue.QueueTests.test_duplicate_claim_rejected",
+    "test_task_queue.QueueTests.test_two_processes_cannot_both_claim",
+    "test_task_queue.QueueTests.test_kill_at_each_stage_does_not_rerun_or_refund",
+    "test_task_queue.QueueTests.test_stale_holder_publish_rejected_by_fencing",
+    "test_task_queue.QueueTests.test_lease_expiry_is_interrupted_not_rerun",
+    "test_task_queue.QueueTests.test_heartbeat_extends_lease_without_changing_token",
+    "test_task_queue.QueueTests.test_corrupted_database_fails_closed_without_reset",
+    "test_task_queue.QueueTests.test_unknown_state_fails_closed",
+    "test_task_queue.QueueTests.test_migration_up_down_preserves_legacy_rows",
+    "test_task_queue.QueueTests.test_reservation_persisted_before_model_and_not_refunded",
+    "test_task_queue.QueueTests.test_clock_backwards_fails_closed",
+    "test_task_queue.QueueTests.test_schema_mismatch_does_not_auto_migrate",
+    "test_task_queue.QueueTests.test_unconfigured_dispatcher_matches_current_behavior",
+    "test_task_queue.QueueTests.test_configured_dispatcher_reserves_before_model",
+    "test_task_queue.QueueTests.test_dispatcher_stale_fence_blocks_publish",
+    "test_task_queue.QueueTests.test_example_settings_leave_queue_unconfigured"
   ],
   "original_baseline_files": {
     "tests/test_automation.py": "ee3ca82718f659c8b92acb9338b42bd1a2a36125111cf25338be45dd1ce34cab",
