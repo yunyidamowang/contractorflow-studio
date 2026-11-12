@@ -145,3 +145,13 @@ The new tests use temporary fixture databases and a fake HTTP layer. They cover 
 Not run: macOS, `node scripts/test_intake.cjs` (the intake workflow was not edited), the live `.automation` directory, and a migration of a real ledger.
 
 Implementation head `c025fbda7444df54b09d75bd80b2e0ac2f10a317`: Actions run https://github.com/yunyidamowang/contractorflow-studio/actions/runs/43194516350 completed at 2026-11-12T17:47:26+08:00. cf-tests (head), cf-tests (merge), and cf-ci-gate all succeeded. The commit that records this sentence is a later head. Its own Actions result is not claimed until that run finishes.
+
+## P1c / CF-20261112-035 (2026-11-12)
+
+Python 3.12.3 on this Linux environment: `.venv/bin/python -m unittest discover -s tests -v` 145/145 in 3.203s. Exact manifest runner 145/145 in 3.117s, `CF_TEST_RESULT` success true, count 145. Seventeen new names in `tests/test_p1_acceptance.py`. No previous name was removed or renamed. The new file's baseline hash was added. Other baseline hashes, `original_baseline_files`, and `baseline_tests` are unchanged. `ci.yml` SHA256 remains `4576223a294403ed8e15536941da5d73110c9f157bbf1bc3a008872dce62260d`.
+
+The new tests use temporary fixture databases and the existing in-memory HTTP stand-in. They cover a linked redacted chain, tamper at seq 2, deletion at seq 2, reorder at seq 2, truncation at seq 3, an injected email that is absent from the failure report, open failing closed without rewriting the file, duplicate claim, two processes, `SIGKILL` after each committed stage, a crash between the stored draft URL and the feedback comment, restart after an expired model lease, token expiry, network loss, a truncated database, an unknown state stored as `blocked`, legacy row preservation on a copy, refusal of `state.db` without `fixture=True`, refusal of a path inside `.automation`, and the uninstalled launchd sample. Example settings still omit `audit_chain`, `task_queue`, and `publish_reconcile`. No real ledger file was opened. No model, network call, once, watch, or `launchctl` was run.
+
+Not run: macOS, `node scripts/test_intake.cjs` (the intake workflow was not edited), the live `.automation` directory, a migration of a real ledger, and a physical power cut.
+
+Implementation head `f06a44c4878915387348f23d80a522a513cef700`: Actions run https://github.com/yunyidamowang/contractorflow-studio/actions/runs/43228201885 completed at 2026-11-12T21:32:29+08:00. cf-tests (head), cf-tests (merge), and cf-ci-gate all succeeded. The commit that records this sentence is a later head. Its own Actions result is not claimed until that run finishes.

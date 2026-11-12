@@ -12,6 +12,10 @@ migrate_down is called, and it refuses a file named state.db.
 
 A breaker object, when attached, is latched on duplicate claim and ledger
 corruption. This module never clears that breaker.
+
+audit=True appends a hash chain in the same transaction as each recorded
+transition. The chain stays empty unless that flag is set. Opening a database
+whose chain does not verify fails closed. verify_export is read-only.
 """
 import fcntl
 import hashlib
@@ -34,6 +38,34 @@ _FEEDBACK_CAP = 2
 _FEEDBACK_WINDOW_MS = 86_400_000
 _BRANCH = re.compile(r'codex/issue-\d+-attempt-[12]-[0-9]+\Z')
 _SHA = re.compile(r'[0-9a-f]{40}\Z')
+_CHAIN_HASH = re.compile(r'[0-9a-f]{64}\Z')
+CHAIN_RECORD_VERSION = 1
+GENESIS = hashlib.sha256(b'cf-audit-chain-v1\n').hexdigest()
+_CHAIN_EVENTS = frozenset({
+    'claim', 'lease_renew', 'lease_expire', 'fencing_reject', 'state',
+    'publish_unknown', 'reconcile_result', 'feedback_retry', 'breaker_latch',
+})
+_BREAKER_REASONS = frozenset({
+    'auth', 'branch_protection', 'policy', 'ledger',
+    'duplicate_claim', 'unreconcilable_write', 'safety_test',
+})
+_DETAILS = frozenset({
+    'attempt_reserved', 'lease_renewed', 'lease_expired', 'clock_moved_backwards',
+    'closed', 'unknown_state', 'publish_recorded', 'target_recorded',
+    'feedback_post', 'publish_unknown', 'publish_exists', 'publish_unreconciled',
+    'publish_absent', 'publish_partial', 'feedback_recorded', 'feedback_capped',
+    'feedback_unknown', 'duplicate_rejected', 'fencing_rejected', 'redacted',
+    'queued', 'claimed', 'snapshot', 'model', 'testing', 'publishing',
+    'feedback_pending', 'review', 'blocked', 'stopped', 'interrupted',
+    'auth', 'branch_protection', 'policy', 'ledger', 'duplicate_claim',
+    'unreconcilable_write', 'safety_test',
+})
+_DETAIL_ALIAS = {
+    'heartbeat': 'lease_renewed',
+    'recorded': 'publish_recorded',
+    'lease expired': 'lease_expired',
+    'clock moved backwards': 'clock_moved_backwards',
+}
 # feedback_pending stays put on a normal failure so a later slice can retry
 # the comment without starting the model again. Lease expiry still interrupts it.
 HOLDABLE = frozenset({
@@ -91,6 +123,23 @@ _UP = (
         fencing_token INTEGER NOT NULL,
         at_ms INTEGER NOT NULL,
         detail TEXT NOT NULL
+    )''',
+    '''CREATE TABLE cf_audit_chain_v1 (
+        seq INTEGER PRIMARY KEY,
+        record_version INTEGER NOT NULL,
+        at_ms INTEGER NOT NULL,
+        event TEXT NOT NULL,
+        task_id INTEGER NOT NULL,
+        state TEXT NOT NULL,
+        fencing_token INTEGER NOT NULL,
+        detail TEXT NOT NULL,
+        prev_hash TEXT NOT NULL,
+        record_hash TEXT NOT NULL
+    )''',
+    '''CREATE TABLE cf_audit_chain_tip_v1 (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        length INTEGER NOT NULL,
+        tip_hash TEXT NOT NULL
     )''',
 )
 
@@ -235,6 +284,14 @@ class Hold:
             self.queue._terminal(conn, row, state, now, 'closed')
         return self
 
+    def _reject_fence(self, conn, row, now):
+        if self.queue.audit:
+            token = row['fencing_token'] if type(row['fencing_token']) is int and row['fencing_token'] >= 0 else 0
+            state = row['state'] if row['state'] in STATES else 'blocked'
+            self.queue._append_chain(conn, row['id'], 'fencing_reject', state, token, 'fencing_rejected', now)
+            raise _CommitAndRaise(QueueFenced('fencing token rejected'))
+        raise QueueFenced('fencing token rejected')
+
     def _row(self, conn):
         row = conn.execute('SELECT * FROM cf_task_queue_v1 WHERE id=?', (self.task_id,)).fetchone()
         if row is None:
@@ -255,7 +312,7 @@ class Hold:
             self.queue._terminal(conn, row, 'blocked', now, 'unknown_state', event='unknown_state')
             raise _CommitAndRaise(QueueBlocked('unknown state'))
         if not self._matches(row):
-            raise QueueFenced('fencing token rejected')
+            self._reject_fence(conn, row, now)
         if type(row['reserved_at']) is not int or now < row['reserved_at']:
             self.queue._terminal(conn, row, 'blocked', now, 'clock moved backwards')
             raise _CommitAndRaise(QueueBlocked('clock moved backwards'))
@@ -263,14 +320,15 @@ class Hold:
             self.queue._terminal(conn, row, 'interrupted', now, 'lease expired', event='interrupted')
             raise _CommitAndRaise(QueueFenced('lease expired'))
         if row['state'] not in allowed:
-            raise QueueFenced('fencing token rejected')
+            self._reject_fence(conn, row, now)
         return row
 
 
 class Queue:
-    def __init__(self, database, *, lock_path=None, lease_ms=120_000, heartbeat_ms=30_000, clock=None, breaker=None):
+    def __init__(self, database, *, lock_path=None, lease_ms=120_000, heartbeat_ms=30_000, clock=None, breaker=None, audit=False):
         self.database = Path(database)
         self.breaker = breaker
+        self.audit = audit is True
         if self.database.name == 'state.db' or self.database.is_symlink():
             raise QueueBlocked('queue database must not be the legacy ledger')
         if (type(lease_ms) is not int or type(heartbeat_ms) is not int
@@ -299,6 +357,9 @@ class Queue:
                 for statement in _UP:
                     conn.execute(statement)
                 conn.execute(
+                    'INSERT INTO cf_audit_chain_tip_v1(id, length, tip_hash) VALUES (1, 0, ?)',
+                    (GENESIS,))
+                conn.execute(
                     'INSERT INTO cf_schema_migration(version, name, applied_at) VALUES (1, ?, ?)',
                     ('cf_task_queue_v1', 'explicit'))
                 conn.commit()
@@ -326,6 +387,8 @@ class Queue:
                 conn.execute('BEGIN IMMEDIATE')
                 if _version(conn) != 1:
                     raise QueueBlocked('schema mismatch')
+                conn.execute('DROP TABLE cf_audit_chain_v1')
+                conn.execute('DROP TABLE cf_audit_chain_tip_v1')
                 conn.execute('DROP TABLE cf_queue_audit_v1')
                 conn.execute('DROP TABLE cf_task_queue_v1')
                 conn.execute('DROP TABLE cf_schema_migration')
@@ -350,8 +413,9 @@ class Queue:
         now = self._now(now)
         with self._exclusive() as conn:
             self._breaker_check()
-            if _by_key(conn, key) is not None:
-                self._duplicate()
+            existing = _by_key(conn, key)
+            if existing is not None:
+                self._duplicate(conn, existing['id'], existing['state'], existing['fencing_token'], now)
             attempt = _next_attempt(conn, key)
             conn.execute(
                 '''INSERT INTO cf_task_queue_v1 (
@@ -373,7 +437,9 @@ class Queue:
             self._breaker_check()
             row = _by_key(conn, key)
             if row is None or row['state'] != 'queued' or row['owner_hash'] is not None:
-                self._duplicate()
+                self._duplicate(conn, 0 if row is None else row['id'],
+                                'blocked' if row is None else row['state'],
+                                0 if row is None else row['fencing_token'], now)
             if type(row['reserved_at']) is not int or now < row['reserved_at']:
                 self._terminal(conn, row, 'blocked', now, 'clock moved backwards')
                 raise _CommitAndRaise(QueueBlocked('clock moved backwards'))
@@ -394,8 +460,9 @@ class Queue:
         now = self._now(now)
         with self._exclusive() as conn:
             self._breaker_check()
-            if _by_key(conn, key) is not None:
-                self._duplicate()
+            existing = _by_key(conn, key)
+            if existing is not None:
+                self._duplicate(conn, existing['id'], existing['state'], existing['fencing_token'], now)
             attempt = _next_attempt(conn, key)
             owner = secrets.token_hex(16)
             token = 1
@@ -445,6 +512,23 @@ class Queue:
         state = self.fetch(task_id)['state']
         return state if state in STATES else 'blocked'
 
+    def verify_export(self):
+        """Read-only chain report. Does not repair a bad chain or write the database."""
+        if self.database.name == 'state.db' or self.database.is_symlink():
+            raise QueueBlocked('queue database must not be the legacy ledger')
+        return read_chain_report(self.database)
+
+    def note_breaker(self, reason, now=None):
+        """Append one redacted breaker event. Does nothing unless this queue records the chain."""
+        if not self.audit:
+            return None
+        if reason not in _BREAKER_REASONS:
+            reason = 'unreconcilable_write'
+        now = self._now(now)
+        with self._exclusive() as conn:
+            self._append_chain(conn, 0, 'breaker_latch', 'blocked', 0, reason, now)
+        return reason
+
     def audit_export(self):
         with self._exclusive() as conn:
             rows = conn.execute(
@@ -471,13 +555,13 @@ class Queue:
                 raise QueueBlocked('illegal transition')
             if outcome == 'exists':
                 if not _safe_url(url):
-                    self._latch('unreconcilable_write')
+                    self._latch('unreconcilable_write', conn, row['id'], row['state'], row['fencing_token'], now)
                     self._move_frozen(conn, row, 'blocked', now, 'publish_unreconciled')
                     return
                 self._move_frozen(conn, row, 'feedback_pending', now, 'publish_exists', url=url)
                 return
             if outcome == 'unknown':
-                self._latch('unreconcilable_write')
+                self._latch('unreconcilable_write', conn, row['id'], row['state'], row['fencing_token'], now)
                 self._move_frozen(conn, row, 'blocked', now, 'publish_unreconciled')
                 return
             detail = 'publish_absent' if outcome == 'absent' else 'publish_partial'
@@ -494,7 +578,7 @@ class Queue:
                 raise QueueBlocked('illegal transition')
             posts = row['feedback_posts']
             if type(posts) is not int or not 0 <= posts <= _FEEDBACK_CAP:
-                self._latch('ledger')
+                self._latch('ledger', conn, row['id'], row['state'], row['fencing_token'], now)
                 raise _CommitAndRaise(QueueBlocked('queue database corrupt'))
             if posts >= _FEEDBACK_CAP:
                 raise QueueBlocked('feedback cap reached')
@@ -584,6 +668,37 @@ class Queue:
             '''INSERT INTO cf_queue_audit_v1 (task_id, event, state, fencing_token, at_ms, detail)
                VALUES (?,?,?,?,?,?)''',
             (task_id, event, state, token, now, detail))
+        if self.audit:
+            self._append_chain(conn, task_id, _chain_event_name(event, state, detail), state, token, detail, now)
+
+    def _append_chain(self, conn, task_id, event, state, token, detail, now):
+        if not self.audit:
+            return
+        event = event if event in _CHAIN_EVENTS else 'state'
+        state = state if state in STATES else 'blocked'
+        detail = _chain_detail(detail)
+        if type(task_id) is not int or task_id < 0:
+            task_id = 0
+        if type(token) is not int or token < 0:
+            token = 0
+        if type(now) is not int or now < 0 or now > 10**15:
+            raise QueueBlocked('audit chain failed')
+        tip = conn.execute('SELECT length, tip_hash FROM cf_audit_chain_tip_v1 WHERE id=1').fetchone()
+        if tip is None or type(tip['length']) is not int or tip['length'] < 0 or not _CHAIN_HASH.fullmatch(tip['tip_hash'] or ''):
+            raise QueueBlocked('audit chain failed')
+        seq = tip['length'] + 1
+        prev = tip['tip_hash']
+        digest = _chain_hash(seq, now, event, task_id, state, token, detail, prev)
+        conn.execute(
+            '''INSERT INTO cf_audit_chain_v1 (
+                seq, record_version, at_ms, event, task_id, state, fencing_token, detail, prev_hash, record_hash
+            ) VALUES (?,?,?,?,?,?,?,?,?,?)''',
+            (seq, CHAIN_RECORD_VERSION, now, event, task_id, state, token, detail, prev, digest))
+        current = conn.execute(
+            'UPDATE cf_audit_chain_tip_v1 SET length=?, tip_hash=? WHERE id=1 AND length=? AND tip_hash=?',
+            (seq, digest, tip['length'], prev))
+        if current.rowcount != 1:
+            raise QueueBlocked('audit chain failed')
 
     def _now(self, now):
         if now is None:
@@ -622,7 +737,20 @@ class Queue:
     def _exclusive(self):
         return _Exclusive(self)
 
-    def _latch(self, reason):
+    def _latch(self, reason, conn=None, task_id=0, state='blocked', token=0, now=0):
+        if reason not in _BREAKER_REASONS:
+            reason = 'unreconcilable_write'
+        already = False
+        if self.breaker is not None:
+            try:
+                already = self.breaker.latched()
+            except Exception:
+                already = True
+        if self.audit and conn is not None and self.breaker is not None and not already:
+            safe_state = state if state in STATES else 'blocked'
+            safe_token = token if type(token) is int and token >= 0 else 0
+            safe_id = task_id if type(task_id) is int and task_id >= 0 else 0
+            self._append_chain(conn, safe_id, 'breaker_latch', safe_state, safe_token, reason, now if type(now) is int else 0)
         breaker = self.breaker
         if breaker is None:
             return
@@ -639,9 +767,14 @@ class Queue:
         except Exception:
             raise QueueBlocked('circuit breaker latched') from None
 
-    def _duplicate(self):
-        self._latch('duplicate_claim')
-        raise QueueBlocked('duplicate claim')
+    def _duplicate(self, conn, task_id, state, token, now):
+        if self.audit:
+            safe_state = state if state in STATES else 'blocked'
+            safe_token = token if type(token) is int and token >= 0 else 0
+            safe_id = task_id if type(task_id) is int and task_id >= 0 else 0
+            self._append_chain(conn, safe_id, 'claim', safe_state, safe_token, 'duplicate_rejected', now)
+        self._latch('duplicate_claim', conn, task_id, state, token, now)
+        raise _CommitAndRaise(QueueBlocked('duplicate claim'))
 
     def _task(self, conn, task_id):
         if type(task_id) is not int or task_id < 1:
@@ -712,6 +845,7 @@ class Queue:
             try:
                 check = ro.execute('PRAGMA integrity_check').fetchone()
                 version = _version(ro)
+                report = verify_chain(ro) if version == 1 else None
             except QueueBlocked:
                 self._latch('ledger')
                 raise
@@ -726,6 +860,9 @@ class Queue:
         if version != 1:
             self._latch('ledger')
             raise QueueBlocked('schema mismatch')
+        if report is None or not report['ok']:
+            self._latch('ledger')
+            raise QueueBlocked('audit chain failed')
 
     def _open_checked(self):
         self._read_only_check()
@@ -839,20 +976,26 @@ def _tables(conn):
 def _version(conn):
     names = _tables(conn)
     if 'cf_schema_migration' not in names:
-        if 'cf_task_queue_v1' in names or 'cf_queue_audit_v1' in names:
+        if names & {'cf_task_queue_v1', 'cf_queue_audit_v1', 'cf_audit_chain_v1', 'cf_audit_chain_tip_v1'}:
             raise QueueBlocked('schema mismatch')
         return 0
     try:
         versions = [row[0] for row in conn.execute('SELECT version FROM cf_schema_migration ORDER BY version')]
     except sqlite3.Error:
         raise QueueBlocked('schema mismatch') from None
-    if versions == [1] and {'cf_task_queue_v1', 'cf_queue_audit_v1'} <= names:
+    if versions == [1] and {'cf_task_queue_v1', 'cf_queue_audit_v1', 'cf_audit_chain_v1', 'cf_audit_chain_tip_v1'} <= names:
         try:
             columns = {row[1] for row in conn.execute('PRAGMA table_info(cf_task_queue_v1)')}
+            chain = {row[1] for row in conn.execute('PRAGMA table_info(cf_audit_chain_v1)')}
+            tip = {row[1] for row in conn.execute('PRAGMA table_info(cf_audit_chain_tip_v1)')}
         except sqlite3.Error:
             raise QueueBlocked('schema mismatch') from None
         required = {'publish_branch', 'publish_commit', 'feedback_posts', 'feedback_at'}
         if not required <= columns:
+            raise QueueBlocked('schema mismatch')
+        if chain != {'seq', 'record_version', 'at_ms', 'event', 'task_id', 'state', 'fencing_token', 'detail', 'prev_hash', 'record_hash'}:
+            raise QueueBlocked('schema mismatch')
+        if tip != {'id', 'length', 'tip_hash'}:
             raise QueueBlocked('schema mismatch')
         return 1
     raise QueueBlocked('schema mismatch')
@@ -863,6 +1006,146 @@ def _by_key(conn, key):
         '''SELECT * FROM cf_task_queue_v1
            WHERE repo=? AND issue=? AND authorization_version=? AND trigger_key=?''',
         (key['repo'], key['issue'], key['authorization_version'], key['trigger'])).fetchone()
+
+
+def _chain_event_name(event, state, detail):
+    if event == 'heartbeat':
+        return 'lease_renew'
+    if event == 'interrupted' or detail == 'lease expired':
+        return 'lease_expire'
+    if event == 'claim' or (event == 'reserve' and state == 'claimed'):
+        return 'claim'
+    if state == 'publish_unknown' or detail == 'publish_unknown':
+        return 'publish_unknown'
+    if event == 'reconcile':
+        return 'reconcile_result'
+    if event == 'feedback_attempt':
+        return 'feedback_retry'
+    if event == 'fencing_reject':
+        return 'fencing_reject'
+    if event == 'breaker_latch':
+        return 'breaker_latch'
+    return 'state'
+
+
+def _chain_detail(detail):
+    if type(detail) is not str:
+        return 'redacted'
+    detail = _DETAIL_ALIAS.get(detail, detail)
+    if detail in _DETAILS and '@' not in detail and '://' not in detail:
+        return detail
+    return 'redacted'
+
+
+def _chain_hash(seq, at_ms, event, task_id, state, token, detail, prev):
+    material = '|'.join((
+        str(CHAIN_RECORD_VERSION), str(seq), str(at_ms), event,
+        str(task_id), state, str(token), detail, prev,
+    ))
+    if not material.isascii() or any(char in material for char in '\n\r\x00'):
+        raise QueueBlocked('audit chain failed')
+    return hashlib.sha256(material.encode('ascii')).hexdigest()
+
+
+def _chain_failure(kind, seq):
+    return {'ok': False, 'kind': kind, 'seq': seq, 'records': []}
+
+
+def verify_chain(conn):
+    """Read the chain. The first broken record is the reported location."""
+    try:
+        tips = list(conn.execute('SELECT id, length, tip_hash FROM cf_audit_chain_tip_v1 ORDER BY id'))
+        rows = list(conn.execute(
+            '''SELECT seq, record_version, at_ms, event, task_id, state, fencing_token, detail, prev_hash, record_hash
+               FROM cf_audit_chain_v1 ORDER BY seq'''))
+    except sqlite3.Error:
+        return _chain_failure('unreadable', 0)
+    if len(tips) != 1 or tips[0][0] != 1:
+        return _chain_failure('truncation', 0)
+    length, tip_hash = tips[0][1], tips[0][2]
+    if type(length) is not int or length < 0 or not _CHAIN_HASH.fullmatch(tip_hash or ''):
+        return _chain_failure('tamper', 0)
+    expected = 1
+    for row in rows:
+        seq = row[0]
+        if type(seq) is not int or seq != expected:
+            if type(seq) is int and seq > expected:
+                return _chain_failure('deletion', expected)
+            return _chain_failure('reorder', expected)
+        expected += 1
+    if length != len(rows):
+        if length > len(rows):
+            return _chain_failure('truncation', len(rows) + 1)
+        return _chain_failure('tamper', length + 1)
+    records = []
+    previous = GENESIS
+    for row in rows:
+        seq, version, at_ms, event, task_id, state, token, detail, prev, digest = row
+        if version != CHAIN_RECORD_VERSION or type(at_ms) is not int or not 0 <= at_ms <= 10**15:
+            return _chain_failure('tamper', seq)
+        if type(task_id) is not int or task_id < 0 or type(token) is not int or token < 0:
+            return _chain_failure('tamper', seq)
+        if event not in _CHAIN_EVENTS or state not in STATES or detail not in _DETAILS:
+            return _chain_failure('tamper', seq)
+        if not _CHAIN_HASH.fullmatch(prev or '') or not _CHAIN_HASH.fullmatch(digest or ''):
+            return _chain_failure('tamper', seq)
+        if prev != previous:
+            return _chain_failure('reorder', seq)
+        try:
+            actual = _chain_hash(seq, at_ms, event, task_id, state, token, detail, prev)
+        except QueueBlocked:
+            return _chain_failure('tamper', seq)
+        if actual != digest:
+            return _chain_failure('tamper', seq)
+        previous = digest
+        records.append({
+            'seq': seq,
+            'record_version': version,
+            'at_ms': at_ms,
+            'event': event,
+            'task_id': task_id,
+            'state': state,
+            'fencing_token': token,
+            'detail': detail,
+            'prev_hash': prev,
+            'record_hash': digest,
+        })
+    if previous != tip_hash:
+        where = rows[-1][0] if rows else 1
+        return _chain_failure('truncation', where)
+    return {'ok': True, 'kind': None, 'seq': None, 'records': records}
+
+
+def read_chain_report(database):
+    path = Path(database)
+    if path.name == 'state.db' or path.is_symlink():
+        raise QueueBlocked('queue database must not be the legacy ledger')
+    if not path.is_file():
+        return _chain_failure('unreadable', 0)
+    try:
+        header = path.read_bytes()[:16]
+    except OSError:
+        return _chain_failure('unreadable', 0)
+    if header != _HEADER:
+        return _chain_failure('unreadable', 0)
+    uri = 'file:' + _uri(path) + '?mode=ro'
+    try:
+        conn = sqlite3.connect(uri, uri=True, isolation_level=None)
+    except sqlite3.Error:
+        return _chain_failure('truncation', 0)
+    try:
+        try:
+            check = conn.execute('PRAGMA integrity_check').fetchone()
+            version = _version(conn)
+        except QueueBlocked:
+            return _chain_failure('unreadable', 0)
+        except sqlite3.Error:
+            return _chain_failure('truncation', 0)
+        if check is None or check[0] != 'ok' or version != 1:
+            return _chain_failure('truncation', 0)
+        return verify_chain(conn)
+    finally:
+        conn.close()
 
 
 def _next_attempt(conn, key):

@@ -125,3 +125,17 @@ Python 3.12.3: unittest discover 128/128 in 2.748s. Exact manifest runner 128/12
 Not in this slice: a launchd sample and an audit hash chain. Not run: macOS, dispatcher once/watch, a live model, a migration against a real ledger, and any write of repository variables, secrets, labels, or branch protection. PR #7 was not updated. Issue #10 was not closed.
 
 Implementation head `c025fbda7444df54b09d75bd80b2e0ac2f10a317`: Actions run https://github.com/yunyidamowang/contractorflow-studio/actions/runs/43194516350 completed at 2026-11-12T17:47:26+08:00. cf-tests (head), cf-tests (merge), and cf-ci-gate all succeeded. The commit that records this sentence is a later head. Its own Actions result is not claimed until that run finishes.
+
+## P1c / CF-20261112-035 (2026-11-12)
+
+Audit hash chain, fixture ledger-preservation proof, uninstalled launchd sample, and the failure-injection acceptance suite. The chain records claim, lease renew and expiry, fencing reject, each run state, `publish_unknown`, reconcile result, feedback retry, and breaker latch. `verify_export` reports the first tamper, deletion, reorder, or truncation. A failed chain fails closed on open. Records stay on an allowlist and do not carry tokens, emails, or secrets. The proof tool migrates only a copy and checks legacy row values and attempt counts. It refuses `state.db` unless `fixture=True`, and it always refuses a path inside `.automation`. It does not claim the original whole-file hash is unchanged. The plist example is not installed. `KeepAlive` is false.
+
+The path stays off unless `audit_chain.enabled` is exactly true, and the queue or publish path is itself exactly enabled. Example settings omit `audit_chain`, `task_queue`, and `publish_reconcile`. `enabled` remains false and `canary_issue` remains 4.
+
+Python 3.12.3: unittest discover 145/145 in 3.203s. Exact manifest runner 145/145 in 3.117s, `CF_TEST_RESULT` success true, count 145. Seventeen new names, none removed or renamed. The new file's baseline hash was added. Other baseline hashes, `original_baseline_files`, and `baseline_tests` are unchanged. `ci.yml` SHA256 remains `4576223a294403ed8e15536941da5d73110c9f157bbf1bc3a008872dce62260d`.
+
+Covered on fixtures: duplicate claim, two processes, simulated kill after each committed stage, crash between the recorded draft and the feedback write, restart, token expiry, network loss, ledger corruption, and unknown state ending `blocked`. Those cases keep a single model start and do not create a second pull request. The chain stays verifiable when the database is intact, and a broken or truncated database is reported instead of accepted.
+
+Not run: macOS, launchd load, dispatcher once/watch, a live model, a real GitHub POST, a migration of a real ledger, and any write of repository variables, secrets, labels, or branch protection. PR #7 was not updated. Issue #10 was not closed. A torn disk page and a real power cut were not performed; the kill tests signal the process after the stage commit.
+
+Implementation head `f06a44c4878915387348f23d80a522a513cef700`: Actions run https://github.com/yunyidamowang/contractorflow-studio/actions/runs/43228201885 completed at 2026-11-12T21:32:29+08:00. cf-tests (head), cf-tests (merge), and cf-ci-gate all succeeded. The commit that records this sentence is a later head. Its own Actions result is not claimed until that run finishes.
