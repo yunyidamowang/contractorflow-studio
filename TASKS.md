@@ -110,4 +110,6 @@ Single-machine queue, atomic claim, lease, and fencing. New versioned tables onl
 
 Python 3.12.3: unittest discover 109/109 in 2.236s. Exact manifest runner 109/109 in 2.162s, `CF_TEST_RESULT` success true, count 109. Sixteen new names, none removed or renamed. The new file's baseline hash was added. Other baseline hashes, `original_baseline_files`, and `baseline_tests` are unchanged. `ci.yml` SHA256 remains `4576223a294403ed8e15536941da5d73110c9f157bbf1bc3a008872dce62260d`.
 
-Not in this slice: POST reconciliation, a launchd sample, and audit export. Not run: macOS, dispatcher once/watch, a live model, a migration against a real ledger, and any write of repository variables, secrets, labels, or branch protection. CI check links are recorded after the draft PR's checks finish. PR #7 was not updated.
+Not in this slice: POST reconciliation, a launchd sample, and audit export. Not run: macOS, dispatcher once/watch, a live model, a migration against a real ledger, and any write of repository variables, secrets, labels, or branch protection. PR #7 was not updated.
+
+Head `983a0d63be29eb2ea00c5c263d8807e30420f47f`: Actions run https://github.com/yunyidamowang/contractorflow-studio/actions/runs/43163109679 completed at 2026-11-12T13:41:59+08:00. cf-tests (head), cf-tests (merge), and cf-ci-gate all succeeded.

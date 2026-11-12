@@ -132,4 +132,6 @@ Python 3.12.3 on this Linux environment: `.venv/bin/python -m unittest discover 
 
 The new tests use temporary fixture databases. They cover a duplicate claim, two processes claiming one key, a kill at each listed state, a stale fencing token rejected before the publish callback, lease expiry to `interrupted` without another attempt, a corrupt or missing database left unchanged, an unknown state stored as `blocked`, and migration up/down that keeps exported legacy `runs` and `notices` rows byte-for-byte. A configured dispatcher path records the attempt and `model_started` before the simulated model child. With the feature omitted or `enabled` false, that path is not used. No real ledger file was opened. No model, network call, once, or watch was run.
 
-Not run: macOS, the live `.automation` directory, a migration of a real ledger, and GitHub Actions for this head until the draft PR checks complete.
+Head `983a0d63be29eb2ea00c5c263d8807e30420f47f`: Actions run https://github.com/yunyidamowang/contractorflow-studio/actions/runs/43163109679 completed at 2026-11-12T13:41:59+08:00. cf-tests (head), cf-tests (merge), and cf-ci-gate all succeeded.
+
+Not run: macOS, the live `.automation` directory, and a migration of a real ledger.
