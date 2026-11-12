@@ -46,3 +46,7 @@ Codex 接收后核验关键来源、区分事实与假设、记录需求编号�
 Grok写Goal、Acceptance、Allowed paths、References四节；只填脱敏样本要求，不贴命令/凭据。owner完成专用登录、单仓库Token和真实Demo验收后，才白名单Grok作者及ready加标身份。后续无需逐任务转发聊天；修订作为不可信数据，移除再加ready才接收新一轮，每Issue终身最多两次。草稿PR由人验收，不能自动关闭未验收Issue。原文件交接继续有效。
 
 首次启用额外锁定canary_issue=4；GitHub身份白名单无法区分共用同一账号的Grok与用户，故须用户验收Issue #4后才手动解除canary锁。
+
+## P0-D 身份与安全配置文档（2026-11-12）
+
+CF-20261112-027 只增加文档、登记和两条静态测试。双身份尚未解决，试点保持关闭。`docs/automation/P0_IDENTITY.md` 写角色、端点权限、GitHub App 优先路线、最多一个免费机器账号，以及 noreply 提交和凭据权限。`docs/automation/P0_SECURITY_SETTINGS.md` 是用户本人的安全设置清单；本轮读到的 API 不能证明告警或分支保护已开启。没有创建 App、令牌或账号，没有改仓库设置。`enabled=false`，`canary_issue=4`。intake 诊断仍以 P0-C（PR #13）为准，不在这里重做。交接见 `handoff/outbox/CF-20261112-027.md`。
