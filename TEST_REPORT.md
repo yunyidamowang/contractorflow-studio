@@ -144,4 +144,6 @@ The new tests use temporary fixture databases and a fake HTTP layer. They cover 
 
 Not run: macOS, `node scripts/test_intake.cjs` (the intake workflow was not edited), the live `.automation` directory, and a migration of a real ledger.
 
-Implementation head `c025fbda7444df54b09d75bd80b2e0ac2f10a317`: Actions run https://github.com/yunyidamowang/contractorflow-studio/actions/runs/43194516350 completed at 2026-11-12T17:47:26+08:00. cf-tests (head), cf-tests (merge), and cf-ci-gate all succeeded. The commit that records this sentence is a later head. Its own Actions result is not claimed until that run finishes.
+Implementation head `c025fbda7444df54b09d75bd80b2e0ac2f10a317`: Actions run https://github.com/yunyidamowang/contractorflow-studio/actions/runs/43194516350 completed at 2026-11-12T17:47:26+08:00. cf-tests (head), cf-tests (merge), and cf-ci-gate all succeeded.
+
+Head `96f075609eb8312a3e06af3d4562adb7cf3c57e6`: run https://github.com/yunyidamowang/contractorflow-studio/actions/runs/43194817465 was cancelled by concurrency while the merge job was still running, so cf-ci-gate saw `cancelled`. That was not a test failure. Replacement run https://github.com/yunyidamowang/contractorflow-studio/actions/runs/43194879475 completed at 2026-11-12T17:50:09+08:00 with cf-tests (head), cf-tests (merge), and cf-ci-gate all succeeded.
